@@ -2,6 +2,7 @@
 // Automatically generates SEO blog posts from social media content
 
 import cron from 'node-cron'
+import http from 'http'
 import { getLatestVideos } from './youtube.js'
 import { initClaude, analyzeVideoContent } from './claude.js'
 import { searchProducts, generateSearchLink } from './amazon.js'
@@ -30,6 +31,22 @@ const config = {
   },
   checkInterval: parseInt(process.env.CHECK_INTERVAL_MINUTES) || 60
 }
+
+// Simple health check server for DigitalOcean
+const PORT = process.env.PORT || 8080
+const healthServer = http.createServer((req, res) => {
+  if (req.url === '/health' || req.url === '/') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ status: 'ok', service: 'kyndall-content-engine' }))
+  } else {
+    res.writeHead(404)
+    res.end()
+  }
+})
+
+healthServer.listen(PORT, () => {
+  console.log(`🏥 Health check server running on port ${PORT}`)
+})
 
 // Validate required config
 function validateConfig() {
