@@ -1,7 +1,6 @@
 // Kyndall Content Engine
 // Automatically generates SEO blog posts from social media content
-// Monitors discount code expiration and sends notifications
-// Runs cleanup tasks based on admin settings
+// Posts are created as DRAFTS - must be manually reviewed and published
 
 import cron from 'node-cron'
 import http from 'http'
@@ -19,7 +18,7 @@ import {
   updateAdminStats,
   runCleanup
 } from './sanity.js'
-import { sendExpirationEmail } from './email.js'
+import { sendExpirationEmail, sendNewPostEmail } from './email.js'
 
 // Load environment variables
 const config = {
@@ -44,12 +43,13 @@ const config = {
   email: {
     resendApiKey: process.env.RESEND_API_KEY
   },
-  // Default check interval - will be overridden by admin settings
   checkInterval: parseInt(process.env.CHECK_INTERVAL_MINUTES) || 60
 }
 
-// Simple health check server for DigitalOcean
+// Health check server for DigitalOcean
 const PORT = process.env.PORT || 8080
+let lastRunTime = null
+
 const healthServer = http.createServer((req, res) => {
   if (req.url === '/health' || req.url === '/') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -63,8 +63,6 @@ const healthServer = http.createServer((req, res) => {
     res.end()
   }
 })
-
-let lastRunTime = null
 
 healthServer.listen(PORT, () => {
   console.log(`🏥 Health check server running on port ${PORT}`)
@@ -88,7 +86,7 @@ function validateConfig() {
   }
   
   if (!config.email.resendApiKey) {
-    console.log('⚠️  RESEND_API_KEY not set - expiration emails disabled')
+    console.log('⚠️  RESEND_API_KEY not set - email notifications disabled')
   }
 }
 
@@ -97,8 +95,8 @@ async function checkExpiringCodes(adminSettings) {
   console.log('\n🏷️  Checking for expiring discount codes...')
   
   try {
-    const daysAhead = adminSettings.discountExpirationDays || 14
-    const notificationEmail = adminSettings.notificationEmail || 'hello@kyndallames.com'
+    const daysAhead = adminSettings?.discountExpirationDays || 14
+    const notificationEmail = adminSettings?.notificationEmail || 'hello@kyndallames.com'
     
     const expiringCodes = await getExpiringCodes(daysAhead)
     
@@ -124,8 +122,6 @@ async function checkExpiringCodes(adminSettings) {
           await markReminderSent(code._id)
         }
       }
-    } else {
-      console.log('   ⚠️  No email API key - skipping notification')
     }
     
   } catch (error) {
@@ -142,26 +138,37 @@ async function processNewContent() {
   console.log('========================================\n')
   
   try {
-    // Load admin settings from Sanity
+    // Load admin settings
     console.log('📋 Loading admin settings...')
-    const adminSettings = await getAdminSettings()
-    console.log(`   ✓ Settings loaded (check interval: ${adminSettings.checkIntervalMinutes}min)`)
+    let adminSettings = {}
+    try {
+      adminSettings = await getAdminSettings()
+      console.log(`   ✓ Settings loaded`)
+    } catch (e) {
+      console.log('   Using default settings')
+    }
+    
+    const notificationEmail = adminSettings?.notificationEmail || 'hello@kyndallames.com'
     
     // Skip if auto-create is disabled
-    if (!adminSettings.autoCreatePosts) {
+    if (adminSettings?.autoCreatePosts === false) {
       console.log('   ⏸️  Auto-create posts is disabled in settings')
       return
     }
     
     // 1. Run cleanup tasks
-    await runCleanup()
+    try {
+      await runCleanup()
+    } catch (e) {
+      console.log('   Cleanup skipped')
+    }
     
     // 2. Check expiring discount codes
     await checkExpiringCodes(adminSettings)
     
     // 3. Fetch latest YouTube videos
     console.log('\n📺 Fetching latest YouTube videos...')
-    const maxVideos = adminSettings.maxVideosPerCheck || 5
+    const maxVideos = adminSettings?.maxVideosPerCheck || 5
     const videos = await getLatestVideos(
       config.youtube.apiKey,
       config.youtube.channelId,
@@ -231,7 +238,8 @@ async function processNewContent() {
         productsFound++
       }
       
-      console.log('   📝 Creating draft blog post...')
+      // CREATE AS DRAFT - NOT PUBLISHED
+      console.log('   📝 Creating DRAFT blog post (requires review)...')
       const post = await createDraftBlogPost({
         video,
         analysis,
@@ -239,27 +247,46 @@ async function processNewContent() {
       })
       
       postsCreated++
-      console.log(`   ✅ Created draft: "${post.title}" (ID: ${post._id})`)
+      console.log(`   ✅ Created DRAFT: "${post.title}" (ID: ${post._id})`)
+      console.log(`   ⚠️  Post is a DRAFT - must be reviewed and published manually!`)
+      
+      // Send email notification about new draft
+      if (config.email.resendApiKey) {
+        console.log('   📧 Sending new post notification...')
+        await sendNewPostEmail(
+          config.email.resendApiKey,
+          {
+            title: post.title,
+            excerpt: analysis.blogExcerpt,
+            category: analysis.category,
+            platform: video.platform,
+            productLinks: productLinks
+          },
+          notificationEmail
+        )
+      }
       
       const needsShopmy = productLinks.filter(p => p.needsShopmy)
       if (needsShopmy.length > 0) {
-        console.log(`   📌 ${needsShopmy.length} products need ShopMy links:`)
-        needsShopmy.forEach(p => console.log(`      - ${p.brand} ${p.name}`))
+        console.log(`   📌 ${needsShopmy.length} products need ShopMy links`)
       }
     }
     
     // Update stats
     if (postsCreated > 0) {
-      await updateAdminStats({
-        lastVideoProcessed: videos[0]?.title,
-        totalPostsCreated: postsCreated,
-        totalProductsLinked: productsFound
-      })
+      try {
+        await updateAdminStats({
+          lastVideoProcessed: videos[0]?.title,
+        })
+      } catch (e) {}
     }
     
     console.log('\n✨ Content check complete!')
-    console.log(`   Posts created: ${postsCreated}`)
+    console.log(`   Drafts created: ${postsCreated}`)
     console.log(`   Products found: ${productsFound}`)
+    if (postsCreated > 0) {
+      console.log(`   📧 Review notifications sent to ${notificationEmail}`)
+    }
     
   } catch (error) {
     console.error('❌ Error processing content:', error)
@@ -269,6 +296,8 @@ async function processNewContent() {
 // Initialize and start
 async function main() {
   console.log('🚀 Kyndall Content Engine Starting...\n')
+  console.log('📝 NOTE: All posts are created as DRAFTS')
+  console.log('   They must be reviewed and published manually in Sanity Studio\n')
   
   validateConfig()
   
@@ -277,14 +306,12 @@ async function main() {
   
   console.log('✅ Services initialized')
   
-  // Get check interval from admin settings or use default
+  // Get check interval
   let checkInterval = config.checkInterval
   try {
     const adminSettings = await getAdminSettings()
-    checkInterval = adminSettings.checkIntervalMinutes || checkInterval
-  } catch (e) {
-    console.log('   Using default check interval')
-  }
+    checkInterval = adminSettings?.checkIntervalMinutes || checkInterval
+  } catch (e) {}
   
   console.log(`⏰ Will check for new content every ${checkInterval} minutes\n`)
   
