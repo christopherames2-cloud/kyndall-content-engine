@@ -1,5 +1,6 @@
 // Kyndall Content Engine
 // Automatically generates SEO blog posts from social media content
+// Also monitors discount code expiration dates
 
 import cron from 'node-cron'
 import http from 'http'
@@ -7,7 +8,8 @@ import { getLatestVideos } from './youtube.js'
 import { initClaude, analyzeVideoContent } from './claude.js'
 import { searchProducts, generateSearchLink } from './amazon.js'
 import { findOrSuggestLink, fetchExistingLinks } from './shopmy.js'
-import { initSanity, checkIfVideoProcessed, createDraftBlogPost } from './sanity.js'
+import { initSanity, checkIfVideoProcessed, createDraftBlogPost, getExpiringCodes, markReminderSent } from './sanity.js'
+import { sendExpirationEmail } from './email.js'
 
 // Load environment variables
 const config = {
@@ -28,6 +30,9 @@ const config = {
     projectId: process.env.SANITY_PROJECT_ID || 'f9drkp1w',
     dataset: process.env.SANITY_DATASET || 'production',
     token: process.env.SANITY_API_TOKEN
+  },
+  email: {
+    resendApiKey: process.env.RESEND_API_KEY
   },
   checkInterval: parseInt(process.env.CHECK_INTERVAL_MINUTES) || 60
 }
@@ -64,6 +69,48 @@ function validateConfig() {
     missing.forEach(([name]) => console.error(`  - ${name}`))
     process.exit(1)
   }
+  
+  // Optional warnings
+  if (!config.email.resendApiKey) {
+    console.log('⚠️  RESEND_API_KEY not set - expiration emails disabled')
+  }
+}
+
+// Check for expiring discount codes
+async function checkExpiringCodes() {
+  console.log('\n🏷️  Checking for expiring discount codes...')
+  
+  try {
+    // Get codes expiring in the next 14 days that haven't had a reminder sent
+    const expiringCodes = await getExpiringCodes(14)
+    
+    if (expiringCodes.length === 0) {
+      console.log('   No codes expiring soon')
+      return
+    }
+    
+    console.log(`   Found ${expiringCodes.length} codes expiring soon:`)
+    expiringCodes.forEach(code => {
+      console.log(`   - ${code.brand}: ${code.code} (${code.daysUntilExpiration} days left)`)
+    })
+    
+    // Send email notification
+    if (config.email.resendApiKey) {
+      const emailSent = await sendExpirationEmail(config.email.resendApiKey, expiringCodes)
+      
+      if (emailSent) {
+        // Mark reminders as sent so we don't spam
+        for (const code of expiringCodes) {
+          await markReminderSent(code._id)
+        }
+      }
+    } else {
+      console.log('   ⚠️  No email API key - skipping notification')
+    }
+    
+  } catch (error) {
+    console.error('   Error checking expiring codes:', error.message)
+  }
 }
 
 // Main processing function
@@ -73,8 +120,11 @@ async function processNewContent() {
   console.log('========================================\n')
   
   try {
-    // 1. Fetch latest YouTube videos
-    console.log('📺 Fetching latest YouTube videos...')
+    // 1. Check expiring discount codes first
+    await checkExpiringCodes()
+    
+    // 2. Fetch latest YouTube videos
+    console.log('\n📺 Fetching latest YouTube videos...')
     const videos = await getLatestVideos(
       config.youtube.apiKey,
       config.youtube.channelId,
@@ -82,7 +132,7 @@ async function processNewContent() {
     )
     console.log(`   Found ${videos.length} videos`)
     
-    // 2. Pre-fetch ShopMy links for product matching
+    // 3. Pre-fetch ShopMy links for product matching
     console.log('🛍️  Fetching ShopMy links...')
     let shopmyLinks = []
     if (config.shopmy.apiToken) {
@@ -92,7 +142,7 @@ async function processNewContent() {
       console.log('   ⚠️  No ShopMy token - skipping')
     }
     
-    // 3. Process each video
+    // 4. Process each video
     for (const video of videos) {
       console.log(`\n📹 Processing: "${video.title}"`)
       
