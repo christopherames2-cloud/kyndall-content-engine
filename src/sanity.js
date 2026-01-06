@@ -1,6 +1,5 @@
 // Sanity CMS Service
-// Creates DRAFT blog posts from analyzed content
-// IMPORTANT: All posts are created as DRAFTS - they must be manually published
+// ALL POSTS ARE CREATED AS DRAFTS
 
 import { createClient } from '@sanity/client'
 
@@ -17,24 +16,16 @@ export function initSanity(projectId, dataset, token) {
 }
 
 export async function getAdminSettings() {
-  if (!client) throw new Error('Sanity client not initialized')
-  
+  if (!client) return { notificationEmail: 'hello@kyndallames.com', discountExpirationDays: 14 }
   const query = `*[_type == "adminSettings"][0]`
   const settings = await client.fetch(query)
-  
-  return settings || {
-    notificationEmail: 'hello@kyndallames.com',
-    discountExpirationDays: 14,
-  }
+  return settings || { notificationEmail: 'hello@kyndallames.com', discountExpirationDays: 14 }
 }
 
-export async function updateAdminStats(stats) {
-  // Optional stats update
-}
+export async function updateAdminStats(stats) {}
 
 export async function checkIfVideoProcessed(videoId) {
   if (!client) throw new Error('Sanity client not initialized')
-  
   const query = `*[_type == "blogPost" && videoId == $videoId][0]`
   const result = await client.fetch(query, { videoId })
   return !!result
@@ -42,30 +33,21 @@ export async function checkIfVideoProcessed(videoId) {
 
 async function uploadImageFromUrl(imageUrl, filename) {
   if (!imageUrl || !client) return null
-  
   try {
     console.log(`      Downloading thumbnail...`)
-    
     const response = await fetch(imageUrl)
     if (!response.ok) return null
-    
     const arrayBuffer = await response.arrayBuffer()
     const buffer = Buffer.from(arrayBuffer)
-    
     console.log(`      Uploading to Sanity...`)
     const asset = await client.assets.upload('image', buffer, {
       filename: filename || 'thumbnail.jpg',
       contentType: 'image/jpeg'
     })
-    
     console.log(`      ✓ Thumbnail uploaded`)
-    
     return {
       _type: 'image',
-      asset: {
-        _type: 'reference',
-        _ref: asset._id
-      }
+      asset: { _type: 'reference', _ref: asset._id }
     }
   } catch (error) {
     console.error(`      Thumbnail upload failed:`, error.message)
@@ -75,33 +57,24 @@ async function uploadImageFromUrl(imageUrl, filename) {
 
 export async function createDraftBlogPost({ video, analysis, productLinks }) {
   if (!client) throw new Error('Sanity client not initialized')
-  
-  // Upload thumbnail
+
   let thumbnailAsset = null
   if (video.thumbnail) {
     thumbnailAsset = await uploadImageFromUrl(video.thumbnail, `${video.id}-thumb.jpg`)
   }
-  
-  // Build content
+
   let content = analysis.blogContent || ''
   for (const productLink of productLinks) {
     const placeholder = `[PRODUCT_LINK:${productLink.name}]`
-    const linkText = `**${productLink.name}**`
-    content = content.replace(placeholder, linkText)
+    content = content.replace(placeholder, `**${productLink.name}**`)
   }
-  
-  // CREATE AS DRAFT - THIS IS CRITICAL
+
+  // THE DOCUMENT - STATUS IS DRAFT
   const doc = {
     _type: 'blogPost',
-    
-    // EXPLICITLY SET TO DRAFT - NOT PUBLISHED
     status: 'draft',
-    
     title: analysis.blogTitle,
-    slug: {
-      _type: 'slug',
-      current: generateSlug(analysis.blogTitle)
-    },
+    slug: { _type: 'slug', current: generateSlug(analysis.blogTitle) },
     seoTitle: analysis.seoTitle,
     seoDescription: analysis.seoDescription,
     excerpt: analysis.blogExcerpt,
@@ -112,22 +85,13 @@ export async function createDraftBlogPost({ video, analysis, productLinks }) {
     thumbnail: thumbnailAsset,
     thumbnailUrl: video.thumbnail || null,
     views: video.viewCount ? `${formatViews(video.viewCount)} views` : undefined,
-    content: [
-      {
-        _type: 'block',
-        _key: generateKey(),
-        style: 'normal',
-        markDefs: [],
-        children: [
-          {
-            _type: 'span',
-            _key: generateKey(),
-            text: content,
-            marks: []
-          }
-        ]
-      }
-    ],
+    content: [{
+      _type: 'block',
+      _key: generateKey(),
+      style: 'normal',
+      markDefs: [],
+      children: [{ _type: 'span', _key: generateKey(), text: content, marks: [] }]
+    }],
     productsReviewed: false,
     productLinks: productLinks.map(p => ({
       _type: 'productItem',
@@ -151,37 +115,30 @@ export async function createDraftBlogPost({ video, analysis, productLinks }) {
       publishedAt: video.publishedAt
     }
   }
-  
+
   console.log(`      ⚠️  Creating post with status: "${doc.status}"`)
   
   const result = await client.create(doc)
   
-  console.log(`      ✓ Created with status: DRAFT (must be manually published)`)
+  // DOUBLE CHECK - patch to ensure draft status
+  await client.patch(result._id).set({ status: 'draft' }).commit()
+  
+  console.log(`      ✓ Created as DRAFT (ID: ${result._id})`)
   
   return result
 }
 
 export async function getExpiringCodes(daysAhead = 14) {
-  if (!client) throw new Error('Sanity client not initialized')
-  
+  if (!client) return []
   const today = new Date()
   const futureDate = new Date()
   futureDate.setDate(today.getDate() + daysAhead)
-  
   const todayStr = today.toISOString().split('T')[0]
   const futureDateStr = futureDate.toISOString().split('T')[0]
-  
   const query = `*[_type == "discountCode" && active == true && expirationDate != null && expirationDate >= $today && expirationDate <= $futureDate && reminderSent != true] | order(expirationDate asc) {
-    _id,
-    brand,
-    code,
-    discount,
-    expirationDate,
-    brandContact
+    _id, brand, code, discount, expirationDate, brandContact
   }`
-  
   const codes = await client.fetch(query, { today: todayStr, futureDate: futureDateStr })
-  
   return codes.map(code => {
     const expDate = new Date(code.expirationDate)
     const daysUntil = Math.ceil((expDate - today) / (1000 * 60 * 60 * 24))
@@ -194,9 +151,7 @@ export async function markReminderSent(codeId) {
   try {
     await client.patch(codeId).set({ reminderSent: true }).commit()
     return true
-  } catch (e) {
-    return false
-  }
+  } catch (e) { return false }
 }
 
 export async function runCleanup() {
@@ -204,11 +159,7 @@ export async function runCleanup() {
 }
 
 function generateSlug(title) {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .substring(0, 96)
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 96)
 }
 
 function generateKey() {
