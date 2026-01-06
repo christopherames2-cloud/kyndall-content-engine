@@ -1,5 +1,6 @@
 // Sanity CMS Service
 // Creates draft blog posts from analyzed content
+// Also manages discount code expiration tracking
 
 import { createClient } from '@sanity/client'
 
@@ -93,7 +94,7 @@ export async function createDraftBlogPost({
     thumbnailAsset = await uploadImageFromUrl(video.thumbnail, filename)
   }
   
-  // Create the blog post document with NEW product workflow
+  // Create the blog post document with product workflow
   const doc = {
     _type: 'blogPost',
     title: analysis.blogTitle,
@@ -128,21 +129,18 @@ export async function createDraftBlogPost({
       }
     ],
     
-    // NEW PRODUCT WORKFLOW
-    productsReviewed: false, // Kyndall must review
+    // Product workflow
+    productsReviewed: false,
     productLinks: productLinks.map(p => ({
       _type: 'productItem',
       _key: generateKey(),
       name: p.name,
       brand: p.brand,
-      // ShopMy
       hasShopmy: p.shopmyUrl ? 'yes' : 'pending',
       shopmyUrl: p.shopmyUrl || null,
-      // Amazon
-      hasAmazon: 'pending', // Always pending - Kyndall must verify
-      suggestedAmazonSearch: p.amazonUrl, // This is the search link to test
-      amazonUrl: null, // Kyndall pastes confirmed link here
-      // Review status
+      hasAmazon: 'pending',
+      suggestedAmazonSearch: p.amazonUrl,
+      amazonUrl: null,
       reviewed: false,
       notes: null,
     })),
@@ -163,6 +161,71 @@ export async function createDraftBlogPost({
   return result
 }
 
+// ============================================
+// DISCOUNT CODE EXPIRATION FUNCTIONS
+// ============================================
+
+export async function getExpiringCodes(daysAhead = 14) {
+  if (!client) throw new Error('Sanity client not initialized')
+  
+  const today = new Date()
+  const futureDate = new Date()
+  futureDate.setDate(today.getDate() + daysAhead)
+  
+  const todayStr = today.toISOString().split('T')[0]
+  const futureDateStr = futureDate.toISOString().split('T')[0]
+  
+  const query = `*[_type == "discountCode" && active == true && expirationDate != null && expirationDate >= $today && expirationDate <= $futureDate && (reminderSent != true)] | order(expirationDate asc) {
+    _id,
+    brand,
+    code,
+    discount,
+    expirationDate,
+    brandContact,
+    reminderSent
+  }`
+  
+  const codes = await client.fetch(query, { today: todayStr, futureDate: futureDateStr })
+  
+  // Add days until expiration
+  return codes.map(code => {
+    const expDate = new Date(code.expirationDate)
+    const daysUntil = Math.ceil((expDate - today) / (1000 * 60 * 60 * 24))
+    return {
+      ...code,
+      daysUntilExpiration: daysUntil
+    }
+  })
+}
+
+export async function markReminderSent(codeId) {
+  if (!client) throw new Error('Sanity client not initialized')
+  
+  try {
+    await client.patch(codeId).set({ reminderSent: true }).commit()
+    console.log(`   Marked reminder sent for ${codeId}`)
+    return true
+  } catch (error) {
+    console.error(`   Failed to mark reminder sent:`, error.message)
+    return false
+  }
+}
+
+export async function getExpiredCodes() {
+  if (!client) throw new Error('Sanity client not initialized')
+  
+  const today = new Date().toISOString().split('T')[0]
+  
+  const query = `*[_type == "discountCode" && active == true && expirationDate != null && expirationDate < $today] {
+    _id,
+    brand,
+    code,
+    expirationDate
+  }`
+  
+  return client.fetch(query, { today })
+}
+
 export async function getRecentDrafts(limit = 10) {
   if (!client) throw new Error('Sanity client not initialized')
   
@@ -178,6 +241,10 @@ export async function getRecentDrafts(limit = 10) {
   
   return client.fetch(query, { limit })
 }
+
+// ============================================
+// HELPERS
+// ============================================
 
 function generateSlug(title) {
   return title
