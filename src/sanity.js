@@ -23,6 +23,46 @@ export async function checkIfVideoProcessed(videoId) {
   return !!result
 }
 
+// Download image and upload to Sanity
+async function uploadImageFromUrl(imageUrl, filename) {
+  if (!imageUrl || !client) return null
+  
+  try {
+    console.log(`      Downloading thumbnail from YouTube...`)
+    
+    // Fetch the image
+    const response = await fetch(imageUrl)
+    if (!response.ok) {
+      console.log(`      Failed to fetch image: ${response.status}`)
+      return null
+    }
+    
+    // Get the image as a buffer
+    const arrayBuffer = await response.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
+    
+    // Upload to Sanity
+    console.log(`      Uploading thumbnail to Sanity...`)
+    const asset = await client.assets.upload('image', buffer, {
+      filename: filename || 'thumbnail.jpg',
+      contentType: 'image/jpeg'
+    })
+    
+    console.log(`      ✓ Thumbnail uploaded: ${asset._id}`)
+    
+    return {
+      _type: 'image',
+      asset: {
+        _type: 'reference',
+        _ref: asset._id
+      }
+    }
+  } catch (error) {
+    console.error(`      Failed to upload thumbnail:`, error.message)
+    return null
+  }
+}
+
 export async function createDraftBlogPost({
   video,
   analysis,
@@ -49,6 +89,13 @@ export async function createDraftBlogPost({
     content = content.replace(placeholder, linkHtml)
   }
   
+  // Upload YouTube thumbnail to Sanity
+  let thumbnailAsset = null
+  if (video.thumbnail) {
+    const filename = `${video.id}-thumbnail.jpg`
+    thumbnailAsset = await uploadImageFromUrl(video.thumbnail, filename)
+  }
+  
   // Create the blog post document
   const doc = {
     _type: 'blogPost',
@@ -64,7 +111,9 @@ export async function createDraftBlogPost({
     platform: video.platform?.toLowerCase() || 'youtube',
     videoUrl: video.url,
     videoId: video.id,
-    // Store YouTube thumbnail URL directly
+    // Save as actual Sanity image asset
+    thumbnail: thumbnailAsset,
+    // Also keep URL as backup
     thumbnailUrl: video.thumbnail || null,
     views: video.viewCount ? `${formatViews(video.viewCount)} views` : undefined,
     content: [
