@@ -16,53 +16,94 @@ export async function analyzeVideoContent(video) {
 
 VIDEO INFORMATION:
 Title: ${video.title}
-Description: ${video.description}
-Tags: ${video.tags?.join(', ') || 'None'}
+Description: ${video.description?.substring(0, 1500) || 'No description'}
+Tags: ${video.tags?.slice(0, 20).join(', ') || 'None'}
 Platform: ${video.platform}
 
 TASKS:
-1. Extract ALL beauty/skincare/fashion products mentioned or likely used
+1. Extract ALL beauty/skincare/fashion products mentioned or likely used (max 5 products)
 2. Suggest a category for this content
 3. Generate SEO-optimized blog content
 
-Respond in this exact JSON format:
+IMPORTANT: Respond with ONLY valid JSON, no other text. No markdown code blocks.
+
 {
   "products": [
     {
       "name": "Product Name",
       "brand": "Brand Name",
-      "type": "makeup/skincare/haircare/fashion/other",
-      "searchQuery": "exact search query for Amazon"
+      "type": "makeup",
+      "searchQuery": "brand product name"
     }
   ],
-  "category": "Makeup|Skincare|Fashion|Lifestyle|Travel",
-  "seoTitle": "SEO optimized title (60 chars max)",
-  "seoDescription": "Meta description for search engines (155 chars max)",
+  "category": "Makeup",
+  "seoTitle": "SEO title under 60 chars",
+  "seoDescription": "Meta description under 155 chars",
   "blogTitle": "Engaging blog post title",
-  "blogExcerpt": "2-3 sentence preview of the content",
-  "blogContent": "Full blog post content in markdown format. Include sections for: Introduction (mention this is from her YouTube), Product Breakdown (list products with placeholders like [PRODUCT_LINK:Product Name] for where affiliate links will go), How To/Tips, and Final Thoughts. Make it sound like Kyndall writing. 300-500 words.",
+  "blogExcerpt": "2-3 sentence preview",
+  "blogContent": "Full blog post in markdown, 200-400 words. Include [PRODUCT_LINK:Product Name] placeholders.",
   "suggestedTags": ["tag1", "tag2", "tag3"]
 }`
 
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 2000,
-    messages: [
-      { role: 'user', content: prompt }
-    ]
-  })
-  
   try {
-    const text = response.content[0].text
-    // Extract JSON from response (handle potential markdown code blocks)
-    const jsonMatch = text.match(/\{[\s\S]*\}/)
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0])
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2000,
+      messages: [
+        { role: 'user', content: prompt }
+      ]
+    })
+    
+    let text = response.content[0].text
+    
+    // Clean up the response
+    text = text.trim()
+    
+    // Remove markdown code blocks if present
+    text = text.replace(/^```json\s*/i, '')
+    text = text.replace(/^```\s*/i, '')
+    text = text.replace(/\s*```$/i, '')
+    
+    // Find JSON object
+    const startIndex = text.indexOf('{')
+    const endIndex = text.lastIndexOf('}')
+    
+    if (startIndex === -1 || endIndex === -1) {
+      console.error('   No JSON object found in response')
+      return null
     }
-    throw new Error('No JSON found in response')
+    
+    text = text.substring(startIndex, endIndex + 1)
+    
+    // Parse JSON
+    const parsed = JSON.parse(text)
+    
+    // Validate required fields
+    if (!parsed.products) parsed.products = []
+    if (!parsed.category) parsed.category = 'Lifestyle'
+    if (!parsed.seoTitle) parsed.seoTitle = video.title.substring(0, 60)
+    if (!parsed.seoDescription) parsed.seoDescription = video.title
+    if (!parsed.blogTitle) parsed.blogTitle = video.title
+    if (!parsed.blogExcerpt) parsed.blogExcerpt = 'Check out this video!'
+    if (!parsed.blogContent) parsed.blogContent = 'Watch the full video for more details.'
+    if (!parsed.suggestedTags) parsed.suggestedTags = []
+    
+    return parsed
+    
   } catch (error) {
-    console.error('Error parsing Claude response:', error)
-    return null
+    console.error('   Claude analysis error:', error.message)
+    
+    // Return a fallback response so we don't skip the video entirely
+    return {
+      products: [],
+      category: 'Lifestyle',
+      seoTitle: video.title.substring(0, 60),
+      seoDescription: video.title.substring(0, 155),
+      blogTitle: video.title,
+      blogExcerpt: `Watch ${video.title} on YouTube.`,
+      blogContent: `Check out this video: ${video.title}\n\nWatch the full video for all the details and product recommendations.`,
+      suggestedTags: ['beauty', 'youtube']
+    }
   }
 }
 
