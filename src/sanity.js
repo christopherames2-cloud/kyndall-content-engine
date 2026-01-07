@@ -128,6 +128,83 @@ export async function getRecentDrafts(limit = 10) {
   return client.fetch(query, { limit })
 }
 
+export async function getAdminSettings() {
+  if (!client) throw new Error('Sanity client not initialized')
+  
+  const query = `*[_type == "adminSettings"][0] {
+    youtubeChannelId,
+    youtubeApiKey,
+    autoProcessVideos,
+    maxVideosPerRun,
+    processedVideoIds
+  }`
+  
+  return client.fetch(query)
+}
+
+export async function updateAdminStats(stats) {
+  if (!client) throw new Error('Sanity client not initialized')
+  
+  // Get or create admin settings document
+  const existing = await client.fetch(`*[_type == "adminSettings"][0]._id`)
+  
+  if (existing) {
+    await client.patch(existing)
+      .set({
+        lastRun: new Date().toISOString(),
+        ...stats
+      })
+      .commit()
+  }
+}
+
+export async function getExpiringCodes(daysAhead = 7) {
+  if (!client) throw new Error('Sanity client not initialized')
+  
+  const futureDate = new Date()
+  futureDate.setDate(futureDate.getDate() + daysAhead)
+  
+  const query = `*[_type == "discountCode" && expiresAt <= $futureDate && expiresAt > now() && !reminderSent] {
+    _id,
+    brand,
+    code,
+    discount,
+    expiresAt
+  }`
+  
+  return client.fetch(query, { futureDate: futureDate.toISOString() })
+}
+
+export async function markReminderSent(codeId) {
+  if (!client) throw new Error('Sanity client not initialized')
+  
+  await client.patch(codeId)
+    .set({ reminderSent: true })
+    .commit()
+}
+
+export async function runCleanup() {
+  if (!client) throw new Error('Sanity client not initialized')
+  
+  // Clean up expired discount codes older than 30 days
+  const thirtyDaysAgo = new Date()
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+  
+  const expiredCodes = await client.fetch(
+    `*[_type == "discountCode" && expiresAt < $date]._id`,
+    { date: thirtyDaysAgo.toISOString() }
+  )
+  
+  if (expiredCodes.length > 0) {
+    console.log(`   Cleaning up ${expiredCodes.length} expired codes`)
+    for (const id of expiredCodes) {
+      await client.delete(id)
+    }
+  }
+  
+  return { deletedCodes: expiredCodes.length }
+}
+
 function generateSlug(title) {
   return title
     .toLowerCase()
