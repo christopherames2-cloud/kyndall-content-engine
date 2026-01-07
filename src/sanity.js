@@ -119,7 +119,7 @@ export async function createDraftBlogPost({
   }
   
   // Map platform to proper casing for schema
-  const platformMap: Record<string, string> = {
+  const platformMap = {
     'youtube': 'YouTube',
     'tiktok': 'TikTok',
     'instagram': 'Instagram',
