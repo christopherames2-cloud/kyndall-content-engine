@@ -127,7 +127,6 @@ export async function createDraftBlogPost({
     videoId: video.id,
     // Also store YouTube thumbnail URL as backup
     thumbnailUrl: video.thumbnail || null,
-    views: video.viewCount ? `${formatViews(video.viewCount)} views` : undefined,
     // Use HTML content format for auto-generated posts
     contentFormat: 'html',
     htmlContent: htmlContent,
@@ -271,11 +270,4 @@ function generateSlug(title) {
 
 function generateKey() {
   return Math.random().toString(36).substring(2, 10)
-}
-
-function formatViews(count) {
-  const num = parseInt(count)
-  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`
-  if (num >= 1000) return `${(num / 1000).toFixed(0)}K`
-  return num.toString()
 }
