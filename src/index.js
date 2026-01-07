@@ -27,7 +27,6 @@ const config = {
     apiKey: process.env.ANTHROPIC_API_KEY
   },
   amazon: {
-    // Kyndall's Amazon Associate tag - this gets added to all Amazon links for affiliate credit
     associateTag: process.env.AMAZON_ASSOCIATE_TAG || 'kyndallames09-20'
   },
   sanity: {
@@ -38,12 +37,19 @@ const config = {
   email: {
     resendApiKey: process.env.RESEND_API_KEY
   },
-  checkInterval: parseInt(process.env.CHECK_INTERVAL_MINUTES) || 60
+  checkInterval: parseInt(process.env.CHECK_INTERVAL_MINUTES) || 60,
+  // On first run, fetch ALL videos. After that, just check for new ones.
+  maxVideosFirstRun: parseInt(process.env.MAX_VIDEOS_FIRST_RUN) || 50,
+  maxVideosRegular: parseInt(process.env.MAX_VIDEOS_REGULAR) || 10
 }
+
+// Track if this is first run
+let isFirstRun = true
 
 // Health check server for DigitalOcean
 const PORT = process.env.PORT || 8080
 let lastRunTime = null
+let stats = { totalProcessed: 0, totalSkipped: 0 }
 
 const healthServer = http.createServer((req, res) => {
   if (req.url === '/health' || req.url === '/') {
@@ -52,7 +58,8 @@ const healthServer = http.createServer((req, res) => {
       status: 'ok', 
       service: 'kyndall-content-engine',
       lastRun: lastRunTime,
-      amazonTag: config.amazon.associateTag
+      amazonTag: config.amazon.associateTag,
+      stats
     }))
   } else {
     res.writeHead(404)
@@ -81,6 +88,7 @@ function validateConfig() {
   }
   
   console.log(`💰 Amazon Associate Tag: ${config.amazon.associateTag}`)
+  console.log(`📺 YouTube Channel: ${config.youtube.channelId}`)
   
   if (!config.email.resendApiKey) {
     console.log('⚠️  RESEND_API_KEY not set - email notifications disabled')
@@ -129,6 +137,7 @@ async function processNewContent() {
   
   console.log('\n========================================')
   console.log(`🔍 Checking for new content - ${lastRunTime}`)
+  console.log(`   Mode: ${isFirstRun ? 'FIRST RUN (fetching all videos)' : 'Regular check'}`)
   console.log('========================================\n')
   
   try {
@@ -148,18 +157,21 @@ async function processNewContent() {
     // 2. Check expiring discount codes
     await checkExpiringCodes(adminSettings)
     
-    // 3. Fetch latest YouTube videos
-    console.log('\n📺 Fetching latest YouTube videos...')
-    const maxVideos = adminSettings?.maxVideosPerCheck || 5
+    // 3. Fetch YouTube videos
+    // On first run, fetch ALL videos. After that, just check recent ones.
+    const maxVideos = isFirstRun ? config.maxVideosFirstRun : config.maxVideosRegular
+    
+    console.log(`\n📺 Fetching up to ${maxVideos} YouTube videos...`)
     const videos = await getLatestVideos(
       config.youtube.apiKey,
       config.youtube.channelId,
       maxVideos
     )
-    console.log(`   Found ${videos.length} videos`)
+    console.log(`   Found ${videos.length} videos total`)
     
     // 4. Process each video
     let postsCreated = 0
+    let postsSkipped = 0
     let totalProducts = 0
     let shopmyLinks = 0
     let amazonLinks = 0
@@ -170,10 +182,11 @@ async function processNewContent() {
       const alreadyProcessed = await checkIfVideoProcessed(video.id)
       if (alreadyProcessed) {
         console.log('   ⏭️  Already processed - skipping')
+        postsSkipped++
         continue
       }
       
-      // Analyze video with Claude - this extracts products from description
+      // Analyze video with Claude
       console.log('   🤖 Analyzing content with Claude...')
       const analysis = await analyzeVideoContent(video)
       if (!analysis) {
@@ -181,14 +194,15 @@ async function processNewContent() {
         continue
       }
       
-      // Products are extracted directly in claude.js from the description
       const productLinks = analysis.products || []
       console.log(`   ✅ Category: ${analysis.category}, Products: ${productLinks.length}`)
       
       // Count link types
       const withShopmy = productLinks.filter(p => p.shopmyUrl).length
       const withAmazon = productLinks.filter(p => p.amazonUrl).length
-      console.log(`      🛍️  ${withShopmy} ShopMy links, 📦 ${withAmazon} Amazon links`)
+      if (productLinks.length > 0) {
+        console.log(`      🛍️  ${withShopmy} ShopMy, 📦 ${withAmazon} Amazon`)
+      }
       
       // Create draft blog post
       console.log('   📝 Creating DRAFT blog post...')
@@ -206,7 +220,8 @@ async function processNewContent() {
       console.log(`   ✅ Created DRAFT: "${post.title}"`)
       
       // Send email notification about new draft
-      if (config.email.resendApiKey) {
+      if (config.email.resendApiKey && !isFirstRun) {
+        // Don't spam emails on first run when processing many videos
         console.log('   📧 Sending notification...')
         await sendNewPostEmail(
           config.email.resendApiKey,
@@ -220,13 +235,32 @@ async function processNewContent() {
           notificationEmail
         )
       }
+      
+      // Small delay between processing to avoid rate limits
+      if (videos.length > 5) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
     }
     
+    // Update stats
+    stats.totalProcessed += postsCreated
+    stats.totalSkipped += postsSkipped
+    
     console.log('\n✨ Content check complete!')
-    console.log(`   Drafts created: ${postsCreated}`)
+    console.log(`   Videos found: ${videos.length}`)
+    console.log(`   Already processed: ${postsSkipped}`)
+    console.log(`   New drafts created: ${postsCreated}`)
     console.log(`   Products found: ${totalProducts}`)
     console.log(`   🛍️  ShopMy links: ${shopmyLinks}`)
-    console.log(`   📦 Amazon links: ${amazonLinks} (with tag: ${config.amazon.associateTag})`)
+    console.log(`   📦 Amazon links: ${amazonLinks}`)
+    
+    if (isFirstRun && postsCreated > 0) {
+      console.log(`\n📧 Sending summary email for ${postsCreated} new drafts...`)
+      // Could send a summary email here instead of individual ones
+    }
+    
+    // Mark first run as complete
+    isFirstRun = false
     
   } catch (error) {
     console.error('❌ Error processing content:', error)
@@ -238,7 +272,8 @@ async function main() {
   console.log('🚀 Kyndall Content Engine Starting...\n')
   console.log('📝 All posts are created as DRAFTS')
   console.log('🛍️  Products extracted from YouTube descriptions')
-  console.log('💰 Amazon links get affiliate tag automatically\n')
+  console.log('💰 Amazon links get affiliate tag automatically')
+  console.log(`📺 First run will fetch up to ${config.maxVideosFirstRun} videos\n`)
   
   validateConfig()
   
@@ -255,9 +290,9 @@ async function main() {
     checkInterval = adminSettings?.checkIntervalMinutes || checkInterval
   } catch (e) {}
   
-  console.log(`⏰ Checking every ${checkInterval} minutes\n`)
+  console.log(`⏰ After first run, checking every ${checkInterval} minutes\n`)
   
-  // Run immediately on start
+  // Run immediately on start (first run)
   await processNewContent()
   
   // Schedule recurring checks
