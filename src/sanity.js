@@ -69,7 +69,15 @@ export async function createDraftBlogPost({ video, analysis, productLinks }) {
     content = content.replace(placeholder, `**${productLink.name}**`)
   }
 
-  // THE DOCUMENT - STATUS IS DRAFT
+  // Log product details
+  console.log(`      📦 Saving ${productLinks.length} products:`)
+  productLinks.forEach(p => {
+    console.log(`         - ${p.brand} ${p.name}`)
+    if (p.originalUrl) console.log(`           Original URL: ${p.originalUrl}`)
+    if (p.shopmyUrl) console.log(`           ShopMy: ${p.shopmyUrl}`)
+  })
+
+  // CREATE AS DRAFT
   const doc = {
     _type: 'blogPost',
     status: 'draft',
@@ -98,11 +106,16 @@ export async function createDraftBlogPost({ video, analysis, productLinks }) {
       _key: generateKey(),
       name: p.name,
       brand: p.brand,
-      hasShopmy: p.shopmyUrl ? 'yes' : 'pending',
-      shopmyUrl: p.shopmyUrl || null,
+      productType: p.type || 'other',
+      // Use originalUrl from YouTube description if available, otherwise ShopMy
+      hasShopmy: (p.shopmyUrl || p.originalUrl) ? 'yes' : 'pending',
+      shopmyUrl: p.shopmyUrl || p.originalUrl || null,
+      // Amazon - use the search link as suggestion
       hasAmazon: 'pending',
       suggestedAmazonSearch: p.amazonUrl,
       amazonUrl: null,
+      // Keep original URL for reference
+      originalUrl: p.originalUrl || null,
       reviewed: false,
     })),
     suggestedTags: analysis.suggestedTags || [],
@@ -141,7 +154,7 @@ export async function getExpiringCodes(daysAhead = 14) {
   const codes = await client.fetch(query, { today: todayStr, futureDate: futureDateStr })
   return codes.map(code => {
     const expDate = new Date(code.expirationDate)
-    const daysUntil = Math.ceil((expDate - today) / (1000 * 60 * 60 * 24))
+    const daysUntil = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
     return { ...code, daysUntilExpiration: daysUntil }
   })
 }
