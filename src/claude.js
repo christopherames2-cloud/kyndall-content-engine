@@ -110,20 +110,107 @@ function extractProductsFromDescription(description) {
   
   if (!description) return products
 
-  // Common beauty brands for identification
+  // Comprehensive beauty brands list for identification
   const beautyBrands = [
+    // Prestige Makeup
     'Benefit Cosmetics', 'Benefit', 'Kylie Cosmetics', 'Kylie', 'Summer Fridays',
-    'Pat McGrath Labs', 'Pat McGrath', 'MAC', 'Patrick Ta', 'Fenty Beauty', 'Fenty',
-    'Kosas', 'Make Up For Ever', 'MUFE', 'Bobbi Brown', 'Rare Beauty',
-    'Charlotte Tilbury', 'NARS', 'Too Faced', 'Urban Decay', 'Tarte',
+    'Pat McGrath Labs', 'Pat McGrath', 'MAC Cosmetics', 'MAC', 'Patrick Ta', 
+    'Fenty Beauty', 'Fenty', 'Kosas', 'Make Up For Ever', 'MUFE', 'Bobbi Brown', 
+    'Rare Beauty', 'Charlotte Tilbury', 'NARS', 'Too Faced', 'Urban Decay', 'Tarte',
     'Glossier', 'Milk Makeup', 'Ilia', 'Tower 28', 'Merit', 'Saie',
-    'Makeup By Mario', 'Laura Mercier', 'Hourglass', 'Armani', 'YSL', 'Dior', 'Chanel',
-    'Estée Lauder', 'Clinique', 'Lancôme', 'Smashbox', 'e.l.f.', 'elf', 'NYX',
-    'Maybelline', 'L\'Oréal', 'Revlon', 'CoverGirl', 'The Ordinary', 'Drunk Elephant',
-    'Tatcha', 'Sunday Riley', 'Supergoop', 'La Mer', 'SK-II', 'Olaplex', 'Dyson',
-    'Moroccan Oil', 'Ouai', 'Sol de Janeiro', 'Gisou', 'Rhode', 'Kiehl\'s',
-    'CeraVe', 'La Roche-Posay', 'Paula\'s Choice', 'Good Molecules', 'Anastasia Beverly Hills',
-    'ABH', 'Huda Beauty', 'Natasha Denona', 'CT', 'PMG'
+    'Makeup By Mario', 'Laura Mercier', 'Hourglass', 'Armani Beauty', 'Giorgio Armani',
+    'YSL Beauty', 'YSL', 'Dior Beauty', 'Dior', 'Chanel', 'Estée Lauder', 'Estee Lauder',
+    'Clinique', 'Lancôme', 'Lancome', 'Smashbox', 'Natasha Denona', 'Tom Ford Beauty', 
+    'Tom Ford', 'Gucci Beauty', 'Valentino Beauty', 'Givenchy', 'Westman Atelier',
+    'Victoria Beckham Beauty', 'Rose Inc', 'Jones Road', 'About Face', 'One Size', 
+    'One/Size', 'Danessa Myricks', 'Lisa Eldridge', 'KVD Beauty', 'KVD', 
+    'Kvd Vegan Beauty', 'Anastasia Beverly Hills', 'ABH', 'Huda Beauty', 'CT', 'PMG',
+    
+    // Drugstore Makeup
+    'e.l.f. Cosmetics', 'e.l.f.', 'elf Cosmetics', 'elf', 'ELF', 'NYX Professional', 
+    'NYX Cosmetics', 'NYX', 'Maybelline New York', 'Maybelline', 'L\'Oréal Paris', 
+    'L\'Oreal Paris', 'L\'Oréal', 'L\'Oreal', 'Loreal', 'Revlon', 'CoverGirl', 'Cover Girl',
+    'Milani', 'ColourPop Cosmetics', 'ColourPop', 'Colour Pop', 'Wet n Wild', 'Wet \'n Wild',
+    'Essence Cosmetics', 'Essence', 'Catrice', 'Physicians Formula', 'Flower Beauty',
+    'Makeup Revolution', 'Revolution Beauty', 'Morphe', 'BH Cosmetics',
+    
+    // Skincare - Prestige
+    'The Ordinary', 'Ordinary', 'Drunk Elephant', 'Tatcha', 'Sunday Riley', 'Supergoop!', 
+    'Supergoop', 'La Mer', 'SK-II', 'SK-2', 'SKII', 'Augustinus Bader', 
+    'Dr. Barbara Sturm', 'Barbara Sturm', 'SkinCeuticals', 'Skinceuticals', 'iS Clinical',
+    'Biologique Recherche', 'Vintner\'s Daughter', 'Summer Fridays', 'Rhode Skin', 'Rhode',
+    'Kiehl\'s', 'Kiehls', 'Fresh Beauty', 'Fresh', 'Origins', 'Shiseido', 'Clarins', 
+    'Sisley Paris', 'Sisley', 'La Prairie', 'Caudalie', 'Herbivore Botanicals', 'Herbivore',
+    'Youth to the People', 'YTTP', 'Glow Recipe', 'Farmacy Beauty', 'Farmacy', 
+    'Versed Skincare', 'Versed', 'Kinship', 'Osea', 'Tula Skincare', 'Tula', 'Dermalogica',
+    'Peter Thomas Roth', 'PTR', 'Ole Henriksen', 'Murad', 'Dr. Dennis Gross', 
+    'Dr Dennis Gross', 'Kate Somerville', 'Elemis', 'Ren Clean Skincare', 'REN', 
+    'First Aid Beauty', 'FAB', 'Josie Maran', 'Biossance', 'Caudalie',
+    
+    // Skincare - Drugstore & Affordable
+    'CeraVe', 'La Roche-Posay', 'La Roche Posay', 'LRP', 'Paula\'s Choice', 'Paulas Choice',
+    'Good Molecules', 'The Inkey List', 'Inkey List', 'INKEY', 'Naturium', 
+    'Aveeno', 'Neutrogena', 'Olay', 'Eucerin', 'Cetaphil', 'Vanicream', 'Aquaphor',
+    'Differin', 'Cerave', 'Garnier', 'Bioderma', 'Vichy', 'Avene', 'Avène',
+    
+    // Korean Beauty (K-Beauty)
+    'Skin1004', 'SKIN1004', 'COSRX', 'Cosrx', 'Innisfree', 'Laneige', 'Sulwhasoo',
+    'Beauty of Joseon', 'Anua', 'ANUA', 'Isntree', 'ISNTREE', 'Torriden', 'TORRIDEN',
+    'Round Lab', 'Roundlab', 'ROUND LAB', 'Missha', 'MISSHA', 'Etude House', 'Etude', 'ETUDE',
+    'Tony Moly', 'TonyMoly', 'TONYMOLY', 'Holika Holika', 'Banila Co', 'BANILA CO',
+    'Neogen', 'NEOGEN', 'Dear Klairs', 'Klairs', 'KLAIRS', 'Purito', 'PURITO', 
+    'Some By Mi', 'SOME BY MI', 'Benton', 'BENTON', 'Heimish', 'HEIMISH', 
+    'Pyunkang Yul', 'I\'m From', 'Im From', 'I\'M FROM', 'Medicube', 'MEDICUBE',
+    'Dr. Jart+', 'Dr. Jart', 'Dr Jart', 'DR. JART+', 'Amorepacific', 'AMOREPACIFIC',
+    'Hera', 'HERA', 'Iope', 'IOPE', 'Primera', 'PRIMERA', 'Mamonde', 'MAMONDE',
+    'Belif', 'BELIF', 'VDL', 'Peach & Lily', 'Peach and Lily', 'Then I Met You',
+    'Soko Glam', 'Numbuzin', 'NUMBUZIN', 'Axis-Y', 'AXIS-Y', 'Haruharu Wonder', 
+    'HARUHARU WONDER', 'By Wishtrend', 'BY WISHTREND', 'Wishtrend', 'TIRTIR', 'Tirtir',
+    'Rom&nd', 'Romand', 'ROM&ND', 'ROMAND', 'Peripera', 'PERIPERA', 'Clio', 'CLIO',
+    'Espoir', 'ESPOIR', 'Moonshot', 'MOONSHOT', 'Amuse', 'AMUSE', 'Dasique', 'DASIQUE',
+    'Wakemake', 'WAKEMAKE', 'Apieu', 'A\'PIEU', 'Tocobo', 'TOCOBO', 'Mixsoon', 'MIXSOON',
+    'Abib', 'ABIB', 'Goodal', 'GOODAL', 'One Thing', 'ONE THING', 'Rovectin', 'ROVECTIN',
+    'Celimax', 'CELIMAX', 'Thank You Farmer', 'Mizon', 'MIZON', 'Skinfood', 'SKINFOOD',
+    
+    // Japanese Beauty (J-Beauty)
+    'Shiseido', 'SHISEIDO', 'Tatcha', 'DHC', 'Hada Labo', 'HADA LABO', 'Rohto', 
+    'Bioré', 'Biore', 'BIORE', 'Canmake', 'CANMAKE', 'Kose', 'KOSE', 'Kosé',
+    'Sofina', 'SOFINA', 'Shu Uemura', 'SHU UEMURA', 'Three Cosmetics', 'THREE',
+    'Suqqu', 'SUQQU', 'Decorte', 'DECORTE', 'Cosme Decorte', 'RMK', 'Lunasol', 'LUNASOL',
+    'Addiction Beauty', 'ADDICTION', 'Kate Tokyo', 'KATE', 'Integrate', 'Majolica Majorca',
+    'Anessa', 'ANESSA', 'Allie', 'ALLIE', 'Senka', 'SENKA', 'Curel', 'Curél',
+    'Melano CC', 'Kikumasamune', 'Naturie', 'Lululun', 'Muji', 'MUJI',
+    
+    // Haircare
+    'Olaplex', 'OLAPLEX', 'Dyson', 'Moroccan Oil', 'Moroccanoil', 'MOROCCANOIL',
+    'Ouai', 'OUAI', 'Oribe', 'ORIBE', 'Kerastase', 'Kérastase', 'KERASTASE',
+    'Sol de Janeiro', 'SOL DE JANEIRO', 'Gisou', 'GISOU', 'Amika', 'amika', 'AMIKA',
+    'Briogeo', 'BRIOGEO', 'Verb', 'VERB', 'Living Proof', 'LIVING PROOF', 'Drybar', 'DRYBAR',
+    'Christophe Robin', 'Bumble and Bumble', 'Bumble and bumble', 'Davines', 'DAVINES',
+    'R+Co', 'R + Co', 'IGK', 'K18', 'Curlsmith', 'CURLSMITH', 'DevaCurl', 'DEVACURL',
+    'SheaMoisture', 'Shea Moisture', 'Cantu', 'CANTU', 'Pattern Beauty', 'Pattern', 
+    'Mielle', 'MIELLE', 'Carol\'s Daughter', 'Aussie', 'OGX', 'Garnier Fructis',
+    'Herbal Essences', 'Pantene', 'TRESemmé', 'Tresemme', 'Head & Shoulders',
+    'Color Wow', 'COLOR WOW', 'Redken', 'REDKEN', 'Matrix', 'Kenra', 'Joico',
+    
+    // Fragrance
+    'Jo Malone', 'Jo Malone London', 'Diptyque', 'DIPTYQUE', 'Le Labo', 'LE LABO',
+    'Byredo', 'BYREDO', 'Maison Margiela', 'Replica', 'REPLICA', 'Tom Ford', 
+    'Chanel', 'CHANEL', 'Dior', 'DIOR', 'YSL', 'Gucci', 'GUCCI', 'Prada', 'PRADA',
+    'Versace', 'VERSACE', 'Dolce & Gabbana', 'D&G', 'Valentino', 'VALENTINO',
+    'Burberry', 'BURBERRY', 'Marc Jacobs', 'MARC JACOBS', 'Clean Reserve', 'CLEAN',
+    'Juliette Has a Gun', 'Kayali', 'KAYALI', 'Ariana Grande', 'Billie Eilish',
+    'Sol de Janeiro', 'Brazilian Bum Bum', 'Glossier You', 'Dedcool', 'DEDCOOL',
+    'Maison Francis Kurkdjian', 'MFK', 'Creed', 'CREED', 'Parfums de Marly',
+    
+    // Tools & Devices
+    'Dyson', 'DYSON', 'GHD', 'ghd', 'T3', 'T3 Micro', 'BaByliss', 'Babyliss', 
+    'Hot Tools', 'HOT TOOLS', 'Bio Ionic', 'BIO IONIC', 'Drybar',
+    'NuFace', 'NuFACE', 'NUFACE', 'Foreo', 'FOREO', 'PMD', 'Dermaflash', 'DERMAFLASH',
+    'Ziip', 'ZIIP', 'Solawave', 'SOLAWAVE', 'CurrentBody', 'Current Body',
+    'Beautyblender', 'Beauty Blender', 'BEAUTYBLENDER', 'Real Techniques', 
+    'Sigma Beauty', 'Sigma', 'SIGMA', 'Artis', 'ARTIS', 'Sephora Collection',
+    'IT Cosmetics', 'IT Brushes', 'EcoTools', 'Tweezerman', 'Revlon Tools'
   ]
 
   // METHOD 1: Look for "PRODUCTS:" section (most reliable for Kyndall's format)
@@ -237,20 +324,61 @@ function extractBrandAndName(fullProductName, beautyBrands) {
   let brand = 'Unknown'
   let name = fullProductName
   
+  // Clean up the product name first
+  name = name.replace(/^[•\-\*\d.]\s*/, '').trim()
+  
   // Sort brands by length (longest first) to match "Benefit Cosmetics" before "Benefit"
   const sortedBrands = [...beautyBrands].sort((a, b) => b.length - a.length)
   
+  // First, check if it starts with a known brand
   for (const b of sortedBrands) {
     const regex = new RegExp(`^${escapeRegex(b)}\\s+`, 'i')
-    if (regex.test(fullProductName)) {
+    if (regex.test(name)) {
       brand = b
-      name = fullProductName.replace(regex, '').trim()
+      name = name.replace(regex, '').trim()
       break
     }
   }
   
+  // If no brand found, check if brand appears anywhere in the name
+  if (brand === 'Unknown') {
+    for (const b of sortedBrands) {
+      if (name.toLowerCase().includes(b.toLowerCase())) {
+        brand = b
+        // Remove brand from name
+        const brandRegex = new RegExp(escapeRegex(b), 'i')
+        name = name.replace(brandRegex, '').trim()
+        // Clean up any leftover separators
+        name = name.replace(/^[\s\-–:]+/, '').trim()
+        break
+      }
+    }
+  }
+  
+  // If still unknown, try to intelligently parse the first word as a brand
+  if (brand === 'Unknown') {
+    const words = fullProductName.trim().split(/\s+/)
+    if (words.length >= 2) {
+      const firstWord = words[0]
+      // Check if first word looks like a brand (capitalized, not common word)
+      const commonWords = ['the', 'a', 'an', 'my', 'best', 'new', 'mini', 'full', 'travel', 'size', 'set', 'kit']
+      if (!commonWords.includes(firstWord.toLowerCase()) && 
+          firstWord[0] === firstWord[0].toUpperCase() &&
+          firstWord.length > 2) {
+        // Looks like it could be a brand
+        brand = firstWord
+        name = words.slice(1).join(' ')
+      }
+    }
+  }
+  
   // Clean up name - remove quotes around shade names but keep the shade
-  name = name.replace(/"/g, '')
+  name = name.replace(/"/g, '').trim()
+  
+  // If name is empty after extraction, use original
+  if (!name) {
+    name = fullProductName.replace(/"/g, '').trim()
+  }
   
   return { brand, name }
 }
@@ -267,30 +395,36 @@ function guessProductType(text) {
       lower.includes('lipstick') || lower.includes('lip ') || lower.includes('mascara') ||
       lower.includes('eyeliner') || lower.includes('eyeshadow') || lower.includes('brow') ||
       lower.includes('primer') || lower.includes('setting') || lower.includes('contour') ||
-      lower.includes('tint') || lower.includes('pencil') || lower.includes('balm')) {
+      lower.includes('tint') || lower.includes('pencil') || lower.includes('balm') ||
+      lower.includes('gloss') || lower.includes('liner') || lower.includes('lash')) {
     return 'makeup'
   }
   
   if (lower.includes('serum') || lower.includes('moisturizer') || lower.includes('cleanser') ||
       lower.includes('toner') || lower.includes('sunscreen') || lower.includes('spf') ||
       lower.includes('retinol') || lower.includes('vitamin c') || lower.includes('mask') ||
-      lower.includes('exfoliant') || lower.includes('cream') || lower.includes('lotion')) {
+      lower.includes('exfoliant') || lower.includes('cream') || lower.includes('lotion') ||
+      lower.includes('essence') || lower.includes('ampoule') || lower.includes('oil') ||
+      lower.includes('mist') || lower.includes('centella') || lower.includes('hyaluronic') ||
+      lower.includes('niacinamide') || lower.includes('aha') || lower.includes('bha')) {
     return 'skincare'
   }
   
   if (lower.includes('shampoo') || lower.includes('conditioner') || lower.includes('hair') ||
-      lower.includes('oil') || lower.includes('styling') || lower.includes('olaplex')) {
+      lower.includes('styling') || lower.includes('olaplex') || lower.includes('scalp') ||
+      lower.includes('leave-in') || lower.includes('treatment')) {
     return 'haircare'
   }
   
   if (lower.includes('perfume') || lower.includes('fragrance') || lower.includes('cologne') ||
-      lower.includes('body mist') || lower.includes('eau de')) {
+      lower.includes('body mist') || lower.includes('eau de') || lower.includes('parfum')) {
     return 'fragrance'
   }
   
   if (lower.includes('brush') || lower.includes('sponge') || lower.includes('curler') ||
       lower.includes('dryer') || lower.includes('straightener') || lower.includes('dyson') ||
-      lower.includes('mirror') || lower.includes('organizer')) {
+      lower.includes('mirror') || lower.includes('organizer') || lower.includes('device') ||
+      lower.includes('roller') || lower.includes('gua sha') || lower.includes('led')) {
     return 'tools'
   }
   
