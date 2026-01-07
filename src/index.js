@@ -27,6 +27,7 @@ const config = {
     apiKey: process.env.ANTHROPIC_API_KEY
   },
   amazon: {
+    // Kyndall's Amazon Associate tag - this gets added to all Amazon links for affiliate credit
     associateTag: process.env.AMAZON_ASSOCIATE_TAG || 'kyndallames09-20'
   },
   sanity: {
@@ -50,7 +51,8 @@ const healthServer = http.createServer((req, res) => {
     res.end(JSON.stringify({ 
       status: 'ok', 
       service: 'kyndall-content-engine',
-      lastRun: lastRunTime
+      lastRun: lastRunTime,
+      amazonTag: config.amazon.associateTag
     }))
   } else {
     res.writeHead(404)
@@ -77,6 +79,8 @@ function validateConfig() {
     missing.forEach(([name]) => console.error(`  - ${name}`))
     process.exit(1)
   }
+  
+  console.log(`💰 Amazon Associate Tag: ${config.amazon.associateTag}`)
   
   if (!config.email.resendApiKey) {
     console.log('⚠️  RESEND_API_KEY not set - email notifications disabled')
@@ -157,6 +161,8 @@ async function processNewContent() {
     // 4. Process each video
     let postsCreated = 0
     let totalProducts = 0
+    let shopmyLinks = 0
+    let amazonLinks = 0
     
     for (const video of videos) {
       console.log(`\n📹 Processing: "${video.title}"`)
@@ -179,6 +185,11 @@ async function processNewContent() {
       const productLinks = analysis.products || []
       console.log(`   ✅ Category: ${analysis.category}, Products: ${productLinks.length}`)
       
+      // Count link types
+      const withShopmy = productLinks.filter(p => p.shopmyUrl).length
+      const withAmazon = productLinks.filter(p => p.amazonUrl).length
+      console.log(`      🛍️  ${withShopmy} ShopMy links, 📦 ${withAmazon} Amazon links`)
+      
       // Create draft blog post
       console.log('   📝 Creating DRAFT blog post...')
       const post = await createDraftBlogPost({
@@ -189,6 +200,9 @@ async function processNewContent() {
       
       postsCreated++
       totalProducts += productLinks.length
+      shopmyLinks += withShopmy
+      amazonLinks += withAmazon
+      
       console.log(`   ✅ Created DRAFT: "${post.title}"`)
       
       // Send email notification about new draft
@@ -211,6 +225,8 @@ async function processNewContent() {
     console.log('\n✨ Content check complete!')
     console.log(`   Drafts created: ${postsCreated}`)
     console.log(`   Products found: ${totalProducts}`)
+    console.log(`   🛍️  ShopMy links: ${shopmyLinks}`)
+    console.log(`   📦 Amazon links: ${amazonLinks} (with tag: ${config.amazon.associateTag})`)
     
   } catch (error) {
     console.error('❌ Error processing content:', error)
@@ -221,11 +237,13 @@ async function processNewContent() {
 async function main() {
   console.log('🚀 Kyndall Content Engine Starting...\n')
   console.log('📝 All posts are created as DRAFTS')
-  console.log('🛍️  Products are extracted from YouTube descriptions\n')
+  console.log('🛍️  Products extracted from YouTube descriptions')
+  console.log('💰 Amazon links get affiliate tag automatically\n')
   
   validateConfig()
   
-  initClaude(config.anthropic.apiKey)
+  // Initialize Claude with Amazon Associate tag
+  initClaude(config.anthropic.apiKey, config.amazon.associateTag)
   initSanity(config.sanity.projectId, config.sanity.dataset, config.sanity.token)
   
   console.log('✅ Services initialized')
