@@ -36,13 +36,23 @@ ${video.description || 'No description'}
 
 VIDEO TAGS: ${video.tags?.join(', ') || 'No tags'}
 
-PRODUCTS ALREADY EXTRACTED FROM DESCRIPTION (DO NOT MODIFY THESE):
-${descriptionProducts.length > 0 ? JSON.stringify(descriptionProducts, null, 2) : 'None found'}
+PRODUCTS ALREADY EXTRACTED FROM DESCRIPTION (with their index numbers):
+${descriptionProducts.length > 0 ? descriptionProducts.map((p, i) => `[${i + 1}] ${p.brand} ${p.name}`).join('\n') : 'None found'}
 
 YOUR TASK:
-1. Generate a blog post about this video
+1. Generate a blog post about this video in HTML format
 2. Suggest SEO metadata
 3. Determine the category
+
+IMPORTANT HTML FORMATTING RULES:
+- Use <h2> for main section headers
+- Use <h3> for sub-headers
+- Use <p> for paragraphs
+- Use <strong> for emphasis (product names, key points)
+- Use <em> for subtle emphasis
+- For product mentions, use: <a href="#product-N" class="product-link">Product Name</a> where N is the product index number from the list above
+- Keep paragraphs concise and scannable
+- Write 200-400 words
 
 NOTE: Products have already been extracted from the description. Do NOT add or modify products.
 
@@ -51,7 +61,7 @@ Respond with ONLY valid JSON (no markdown, no backticks):
   "category": "makeup|skincare|fashion|lifestyle|travel",
   "blogTitle": "Engaging blog title (50-60 chars)",
   "blogExcerpt": "Brief compelling summary (150-160 chars)",
-  "blogContent": "Full blog post (200-400 words) with [PRODUCT_LINK:Product Name] placeholders where products should be linked",
+  "blogContent": "<h2>Section</h2><p>HTML formatted blog post with <a href=\\"#product-1\\" class=\\"product-link\\">Product Name</a> links...</p>",
   "seoTitle": "SEO optimized title (50-60 chars)",
   "seoDescription": "Meta description for search engines (150-160 chars)",
   "suggestedTags": ["tag1", "tag2", "tag3"]
