@@ -1,5 +1,5 @@
 // Sanity CMS Service
-// ALL POSTS ARE CREATED AS DRAFTS
+// Creates draft blog posts from analyzed content
 
 import { createClient } from '@sanity/client'
 
@@ -15,74 +15,63 @@ export function initSanity(projectId, dataset, token) {
   })
 }
 
-export async function getAdminSettings() {
-  if (!client) return { notificationEmail: 'hello@kyndallames.com', discountExpirationDays: 14 }
-  const query = `*[_type == "adminSettings"][0]`
-  const settings = await client.fetch(query)
-  return settings || { notificationEmail: 'hello@kyndallames.com', discountExpirationDays: 14 }
-}
-
-export async function updateAdminStats(stats) {}
-
 export async function checkIfVideoProcessed(videoId) {
   if (!client) throw new Error('Sanity client not initialized')
+  
   const query = `*[_type == "blogPost" && videoId == $videoId][0]`
   const result = await client.fetch(query, { videoId })
   return !!result
 }
 
-async function uploadImageFromUrl(imageUrl, filename) {
-  if (!imageUrl || !client) return null
-  try {
-    console.log(`      Downloading thumbnail...`)
-    const response = await fetch(imageUrl)
-    if (!response.ok) return null
-    const arrayBuffer = await response.arrayBuffer()
-    const buffer = Buffer.from(arrayBuffer)
-    console.log(`      Uploading to Sanity...`)
-    const asset = await client.assets.upload('image', buffer, {
-      filename: filename || 'thumbnail.jpg',
-      contentType: 'image/jpeg'
-    })
-    console.log(`      ✓ Thumbnail uploaded`)
-    return {
-      _type: 'image',
-      asset: { _type: 'reference', _ref: asset._id }
-    }
-  } catch (error) {
-    console.error(`      Thumbnail upload failed:`, error.message)
-    return null
-  }
-}
-
-export async function createDraftBlogPost({ video, analysis, productLinks }) {
+export async function createDraftBlogPost({
+  video,
+  analysis,
+  productLinks
+}) {
   if (!client) throw new Error('Sanity client not initialized')
-
-  let thumbnailAsset = null
-  if (video.thumbnail) {
-    thumbnailAsset = await uploadImageFromUrl(video.thumbnail, `${video.id}-thumb.jpg`)
+  
+  // Build the HTML content with product links inserted
+  let htmlContent = analysis.blogContent || ''
+  
+  // Replace product reference links with actual URLs
+  // Format: <a href="#product-N" class="product-link">Product Name</a>
+  for (let i = 0; i < productLinks.length; i++) {
+    const product = productLinks[i]
+    const productIndex = i + 1
+    
+    // Find all references to this product
+    const pattern = new RegExp(`<a href="#product-${productIndex}"[^>]*class="product-link"[^>]*>([^<]+)</a>`, 'gi')
+    
+    let actualUrl = ''
+    let linkTitle = ''
+    
+    if (product.shopmyUrl) {
+      actualUrl = product.shopmyUrl
+      linkTitle = 'Shop on ShopMy'
+    } else if (product.amazonUrl) {
+      actualUrl = product.amazonUrl
+      linkTitle = 'Shop on Amazon'
+    }
+    
+    if (actualUrl) {
+      htmlContent = htmlContent.replace(pattern, `<a href="${actualUrl}" target="_blank" rel="noopener noreferrer" title="${linkTitle}" class="product-link">$1</a>`)
+    } else {
+      // No link available - just make it bold
+      htmlContent = htmlContent.replace(pattern, '<strong class="product-name">$1</strong>')
+    }
   }
-
-  let content = analysis.blogContent || ''
-  for (const productLink of productLinks) {
-    const placeholder = `[PRODUCT_LINK:${productLink.name}]`
-    content = content.replace(placeholder, `**${productLink.name}**`)
-  }
-
-  // Log product details
-  console.log(`      📦 Saving ${productLinks.length} products:`)
-  productLinks.forEach(p => {
-    console.log(`         - ${p.brand} ${p.name}`)
-    if (p.shopmyUrl) console.log(`           ✓ ShopMy: ${p.shopmyUrl}`)
-    if (p.amazonUrl) console.log(`           ✓ Amazon: ${p.amazonUrl}`)
-  })
-
-  // CREATE AS DRAFT
+  
+  // Also handle any remaining product links that weren't matched (fallback)
+  htmlContent = htmlContent.replace(/<a href="#product-\d+"[^>]*class="product-link"[^>]*>([^<]+)<\/a>/gi, '<strong class="product-name">$1</strong>')
+  
+  // Create the blog post document
   const doc = {
     _type: 'blogPost',
-    status: 'draft',
     title: analysis.blogTitle,
-    slug: { _type: 'slug', current: generateSlug(analysis.blogTitle) },
+    slug: {
+      _type: 'slug',
+      current: generateSlug(analysis.blogTitle)
+    },
     seoTitle: analysis.seoTitle,
     seoDescription: analysis.seoDescription,
     excerpt: analysis.blogExcerpt,
@@ -90,43 +79,26 @@ export async function createDraftBlogPost({ video, analysis, productLinks }) {
     platform: video.platform?.toLowerCase() || 'youtube',
     videoUrl: video.url,
     videoId: video.id,
-    thumbnail: thumbnailAsset,
+    // Store YouTube thumbnail URL directly
     thumbnailUrl: video.thumbnail || null,
     views: video.viewCount ? `${formatViews(video.viewCount)} views` : undefined,
-    content: [{
-      _type: 'block',
+    // Use HTML content format for auto-generated posts
+    contentFormat: 'html',
+    htmlContent: htmlContent,
+    // Keep content array empty for now (could convert later if needed)
+    content: [],
+    // Store product info for reference
+    productLinks: productLinks.map(p => ({
+      _type: 'object',
       _key: generateKey(),
-      style: 'normal',
-      markDefs: [],
-      children: [{ _type: 'span', _key: generateKey(), text: content, marks: [] }]
-    }],
-    productsReviewed: false,
-    productLinks: productLinks.map(p => {
-      // Determine ShopMy status based on whether we have a ShopMy URL
-      const hasShopmy = p.shopmyUrl ? 'yes' : 'pending'
-      // Determine Amazon status based on whether we have an Amazon URL
-      const hasAmazon = p.amazonUrl ? 'yes' : 'pending'
-      
-      return {
-        _type: 'productItem',
-        _key: generateKey(),
-        name: p.name,
-        brand: p.brand,
-        productType: p.type || 'makeup',
-        // ShopMy URL - direct from description if it's a shopmy.us link
-        hasShopmy: hasShopmy,
-        shopmyUrl: p.shopmyUrl || null,
-        // Amazon URL - direct from description if it's an amazon.com link
-        hasAmazon: hasAmazon,
-        amazonUrl: p.amazonUrl || null,
-        // Suggested Amazon search for products without Amazon links
-        suggestedAmazonSearch: p.amazonUrl ? null : `https://www.amazon.com/s?k=${encodeURIComponent(p.searchQuery)}&tag=kyndallames09-20`,
-        // Keep original URL for reference
-        originalUrl: p.originalUrl || null,
-        reviewed: false,
-      }
-    }),
+      name: p.name,
+      brand: p.brand,
+      amazonUrl: p.amazonUrl || null,
+      shopmyUrl: p.shopmyUrl || null,
+      needsShopmy: !p.shopmyUrl
+    })),
     suggestedTags: analysis.suggestedTags || [],
+    status: 'draft', // Always create as draft for Kyndall to review
     publishedAt: new Date().toISOString(),
     autoGenerated: true,
     sourceVideo: {
@@ -136,53 +108,32 @@ export async function createDraftBlogPost({ video, analysis, productLinks }) {
       publishedAt: video.publishedAt
     }
   }
-
-  console.log(`      ⚠️  Creating post with status: "${doc.status}"`)
   
   const result = await client.create(doc)
-  
-  // DOUBLE CHECK - patch to ensure draft status
-  await client.patch(result._id).set({ status: 'draft' }).commit()
-  
-  console.log(`      ✓ Created as DRAFT (ID: ${result._id})`)
-  console.log(`      ✓ ${productLinks.filter(p => p.shopmyUrl).length} products have ShopMy links`)
-  console.log(`      ✓ ${productLinks.filter(p => p.amazonUrl).length} products have Amazon links`)
-  
   return result
 }
 
-export async function getExpiringCodes(daysAhead = 14) {
-  if (!client) return []
-  const today = new Date()
-  const futureDate = new Date()
-  futureDate.setDate(today.getDate() + daysAhead)
-  const todayStr = today.toISOString().split('T')[0]
-  const futureDateStr = futureDate.toISOString().split('T')[0]
-  const query = `*[_type == "discountCode" && active == true && expirationDate != null && expirationDate >= $today && expirationDate <= $futureDate && reminderSent != true] | order(expirationDate asc) {
-    _id, brand, code, discount, expirationDate, brandContact
+export async function getRecentDrafts(limit = 10) {
+  if (!client) throw new Error('Sanity client not initialized')
+  
+  const query = `*[_type == "blogPost" && status == "draft" && autoGenerated == true] | order(publishedAt desc)[0...$limit] {
+    _id,
+    title,
+    category,
+    platform,
+    publishedAt,
+    productLinks
   }`
-  const codes = await client.fetch(query, { today: todayStr, futureDate: futureDateStr })
-  return codes.map(code => {
-    const expDate = new Date(code.expirationDate)
-    const daysUntil = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-    return { ...code, daysUntilExpiration: daysUntil }
-  })
-}
-
-export async function markReminderSent(codeId) {
-  if (!client) return false
-  try {
-    await client.patch(codeId).set({ reminderSent: true }).commit()
-    return true
-  } catch (e) { return false }
-}
-
-export async function runCleanup() {
-  console.log('   Cleanup: skipped')
+  
+  return client.fetch(query, { limit })
 }
 
 function generateSlug(title) {
-  return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 96)
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .substring(0, 96)
 }
 
 function generateKey() {
