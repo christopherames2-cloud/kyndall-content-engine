@@ -111,6 +111,22 @@ export async function createDraftBlogPost({
   htmlContent = htmlContent.replace(/<a href="#product-\d+"[^>]*class="product-link"[^>]*>([^<]+)<\/a>/gi, '<strong class="product-name">$1</strong>')
   
   // Create the blog post document
+  // Determine aspect ratio based on platform
+  let aspectRatio = 'landscape' // default for YouTube
+  const platformLower = (video.platform || 'youtube').toLowerCase()
+  if (platformLower === 'tiktok' || platformLower === 'instagram') {
+    aspectRatio = 'portrait'
+  }
+  
+  // Map platform to proper casing for schema
+  const platformMap: Record<string, string> = {
+    'youtube': 'YouTube',
+    'tiktok': 'TikTok',
+    'instagram': 'Instagram',
+    'blog': 'Blog'
+  }
+  const platform = platformMap[platformLower] || 'YouTube'
+  
   const doc = {
     _type: 'blogPost',
     title: analysis.blogTitle,
@@ -122,7 +138,8 @@ export async function createDraftBlogPost({
     seoDescription: analysis.seoDescription,
     excerpt: analysis.blogExcerpt,
     category: analysis.category?.toLowerCase() || 'lifestyle',
-    platform: video.platform?.toLowerCase() || 'youtube',
+    platform: platform,
+    aspectRatio: aspectRatio,
     videoUrl: video.url,
     videoId: video.id,
     // Also store YouTube thumbnail URL as backup
