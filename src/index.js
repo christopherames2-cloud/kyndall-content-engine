@@ -6,8 +6,6 @@ import cron from 'node-cron'
 import http from 'http'
 import { getLatestVideos } from './youtube.js'
 import { initClaude, analyzeVideoContent } from './claude.js'
-import { searchProducts } from './amazon.js'
-import { findOrSuggestLink, fetchExistingLinks } from './shopmy.js'
 import { 
   initSanity, 
   checkIfVideoProcessed, 
@@ -15,7 +13,6 @@ import {
   getExpiringCodes, 
   markReminderSent,
   getAdminSettings,
-  updateAdminStats,
   runCleanup
 } from './sanity.js'
 import { sendExpirationEmail, sendNewPostEmail } from './email.js'
@@ -30,10 +27,7 @@ const config = {
     apiKey: process.env.ANTHROPIC_API_KEY
   },
   amazon: {
-    associateTag: process.env.AMAZON_ASSOCIATE_TAG
-  },
-  shopmy: {
-    apiToken: process.env.SHOPMY_API_TOKEN
+    associateTag: process.env.AMAZON_ASSOCIATE_TAG || 'kyndallames09-20'
   },
   sanity: {
     projectId: process.env.SANITY_PROJECT_ID || 'f9drkp1w',
@@ -74,7 +68,6 @@ function validateConfig() {
     ['YOUTUBE_API_KEY', config.youtube.apiKey],
     ['YOUTUBE_CHANNEL_ID', config.youtube.channelId],
     ['ANTHROPIC_API_KEY', config.anthropic.apiKey],
-    ['AMAZON_ASSOCIATE_TAG', config.amazon.associateTag],
     ['SANITY_API_TOKEN', config.sanity.token]
   ]
   
@@ -105,10 +98,7 @@ async function checkExpiringCodes(adminSettings) {
       return
     }
     
-    console.log(`   Found ${expiringCodes.length} codes expiring in next ${daysAhead} days:`)
-    expiringCodes.forEach(code => {
-      console.log(`   - ${code.brand}: ${code.code} (${code.daysUntilExpiration} days left)`)
-    })
+    console.log(`   Found ${expiringCodes.length} codes expiring in next ${daysAhead} days`)
     
     if (config.email.resendApiKey) {
       const emailSent = await sendExpirationEmail(
@@ -139,29 +129,17 @@ async function processNewContent() {
   
   try {
     // Load admin settings
-    console.log('📋 Loading admin settings...')
     let adminSettings = {}
     try {
       adminSettings = await getAdminSettings()
-      console.log(`   ✓ Settings loaded`)
-    } catch (e) {
-      console.log('   Using default settings')
-    }
+    } catch (e) {}
     
     const notificationEmail = adminSettings?.notificationEmail || 'hello@kyndallames.com'
-    
-    // Skip if auto-create is disabled
-    if (adminSettings?.autoCreatePosts === false) {
-      console.log('   ⏸️  Auto-create posts is disabled in settings')
-      return
-    }
     
     // 1. Run cleanup tasks
     try {
       await runCleanup()
-    } catch (e) {
-      console.log('   Cleanup skipped')
-    }
+    } catch (e) {}
     
     // 2. Check expiring discount codes
     await checkExpiringCodes(adminSettings)
@@ -176,19 +154,9 @@ async function processNewContent() {
     )
     console.log(`   Found ${videos.length} videos`)
     
-    // 4. Pre-fetch ShopMy links
-    console.log('🛍️  Fetching ShopMy links...')
-    let shopmyLinks = []
-    if (config.shopmy.apiToken) {
-      shopmyLinks = await fetchExistingLinks(config.shopmy.apiToken)
-      console.log(`   Found ${shopmyLinks.length} existing ShopMy links`)
-    } else {
-      console.log('   ⚠️  No ShopMy token - skipping')
-    }
-    
-    // 5. Process each video
+    // 4. Process each video
     let postsCreated = 0
-    let productsFound = 0
+    let totalProducts = 0
     
     for (const video of videos) {
       console.log(`\n📹 Processing: "${video.title}"`)
@@ -199,47 +167,20 @@ async function processNewContent() {
         continue
       }
       
+      // Analyze video with Claude - this extracts products from description
       console.log('   🤖 Analyzing content with Claude...')
       const analysis = await analyzeVideoContent(video)
       if (!analysis) {
         console.log('   ❌ Analysis failed - skipping')
         continue
       }
-      console.log(`   ✅ Found ${analysis.products.length} products, Category: ${analysis.category}`)
       
-      console.log('   🔗 Finding product links...')
-      const productLinks = []
+      // Products are extracted directly in claude.js from the description
+      const productLinks = analysis.products || []
+      console.log(`   ✅ Category: ${analysis.category}, Products: ${productLinks.length}`)
       
-      for (const product of analysis.products) {
-        console.log(`      - ${product.brand} ${product.name}`)
-        
-        let shopmyUrl = null
-        if (config.shopmy.apiToken) {
-          const shopmyResult = await findOrSuggestLink(config.shopmy.apiToken, product)
-          if (shopmyResult.found) {
-            shopmyUrl = shopmyResult.url
-            console.log(`        ✓ Found on ShopMy`)
-          } else {
-            console.log(`        → Not on ShopMy yet`)
-          }
-        }
-        
-        const amazonResult = await searchProducts(product.searchQuery, config.amazon.associateTag)
-        
-        productLinks.push({
-          name: product.name,
-          brand: product.brand,
-          type: product.type,
-          shopmyUrl,
-          amazonUrl: amazonResult.searchLink,
-          needsShopmy: !shopmyUrl
-        })
-        
-        productsFound++
-      }
-      
-      // CREATE AS DRAFT - NOT PUBLISHED
-      console.log('   📝 Creating DRAFT blog post (requires review)...')
+      // Create draft blog post
+      console.log('   📝 Creating DRAFT blog post...')
       const post = await createDraftBlogPost({
         video,
         analysis,
@@ -247,12 +188,12 @@ async function processNewContent() {
       })
       
       postsCreated++
-      console.log(`   ✅ Created DRAFT: "${post.title}" (ID: ${post._id})`)
-      console.log(`   ⚠️  Post is a DRAFT - must be reviewed and published manually!`)
+      totalProducts += productLinks.length
+      console.log(`   ✅ Created DRAFT: "${post.title}"`)
       
       // Send email notification about new draft
       if (config.email.resendApiKey) {
-        console.log('   📧 Sending new post notification...')
+        console.log('   📧 Sending notification...')
         await sendNewPostEmail(
           config.email.resendApiKey,
           {
@@ -265,28 +206,11 @@ async function processNewContent() {
           notificationEmail
         )
       }
-      
-      const needsShopmy = productLinks.filter(p => p.needsShopmy)
-      if (needsShopmy.length > 0) {
-        console.log(`   📌 ${needsShopmy.length} products need ShopMy links`)
-      }
-    }
-    
-    // Update stats
-    if (postsCreated > 0) {
-      try {
-        await updateAdminStats({
-          lastVideoProcessed: videos[0]?.title,
-        })
-      } catch (e) {}
     }
     
     console.log('\n✨ Content check complete!')
     console.log(`   Drafts created: ${postsCreated}`)
-    console.log(`   Products found: ${productsFound}`)
-    if (postsCreated > 0) {
-      console.log(`   📧 Review notifications sent to ${notificationEmail}`)
-    }
+    console.log(`   Products found: ${totalProducts}`)
     
   } catch (error) {
     console.error('❌ Error processing content:', error)
@@ -296,8 +220,8 @@ async function processNewContent() {
 // Initialize and start
 async function main() {
   console.log('🚀 Kyndall Content Engine Starting...\n')
-  console.log('📝 NOTE: All posts are created as DRAFTS')
-  console.log('   They must be reviewed and published manually in Sanity Studio\n')
+  console.log('📝 All posts are created as DRAFTS')
+  console.log('🛍️  Products are extracted from YouTube descriptions\n')
   
   validateConfig()
   
@@ -313,7 +237,7 @@ async function main() {
     checkInterval = adminSettings?.checkIntervalMinutes || checkInterval
   } catch (e) {}
   
-  console.log(`⏰ Will check for new content every ${checkInterval} minutes\n`)
+  console.log(`⏰ Checking every ${checkInterval} minutes\n`)
   
   // Run immediately on start
   await processNewContent()
@@ -322,7 +246,7 @@ async function main() {
   const cronExpression = `0 */${checkInterval} * * * *`
   cron.schedule(cronExpression, processNewContent)
   
-  console.log('\n🎯 Content engine running. Press Ctrl+C to stop.')
+  console.log('\n🎯 Content engine running.')
 }
 
 main().catch(console.error)
