@@ -15,6 +15,42 @@ export function initSanity(projectId, dataset, token) {
   })
 }
 
+// Upload an image from URL to Sanity assets
+async function uploadImageFromUrl(imageUrl, filename) {
+  if (!client || !imageUrl) return null
+  
+  try {
+    // Fetch the image
+    const response = await fetch(imageUrl)
+    if (!response.ok) {
+      console.log('   Failed to fetch thumbnail:', response.status)
+      return null
+    }
+    
+    const buffer = await response.arrayBuffer()
+    const blob = new Blob([buffer])
+    
+    // Upload to Sanity
+    const asset = await client.assets.upload('image', blob, {
+      filename: filename || 'thumbnail.jpg',
+      contentType: response.headers.get('content-type') || 'image/jpeg'
+    })
+    
+    console.log('   ✓ Thumbnail uploaded to Sanity')
+    
+    return {
+      _type: 'image',
+      asset: {
+        _type: 'reference',
+        _ref: asset._id
+      }
+    }
+  } catch (error) {
+    console.log('   Could not upload thumbnail:', error.message)
+    return null
+  }
+}
+
 export async function checkIfVideoProcessed(videoId) {
   if (!client) throw new Error('Sanity client not initialized')
   
@@ -29,6 +65,16 @@ export async function createDraftBlogPost({
   productLinks
 }) {
   if (!client) throw new Error('Sanity client not initialized')
+  
+  // Upload thumbnail image to Sanity
+  let thumbnailImage = null
+  if (video.thumbnail) {
+    console.log('   Uploading thumbnail...')
+    thumbnailImage = await uploadImageFromUrl(
+      video.thumbnail, 
+      `${video.id}-thumbnail.jpg`
+    )
+  }
   
   // Build the HTML content with product links inserted
   let htmlContent = analysis.blogContent || ''
@@ -79,7 +125,7 @@ export async function createDraftBlogPost({
     platform: video.platform?.toLowerCase() || 'youtube',
     videoUrl: video.url,
     videoId: video.id,
-    // Store YouTube thumbnail URL directly
+    // Also store YouTube thumbnail URL as backup
     thumbnailUrl: video.thumbnail || null,
     views: video.viewCount ? `${formatViews(video.viewCount)} views` : undefined,
     // Use HTML content format for auto-generated posts
@@ -89,13 +135,18 @@ export async function createDraftBlogPost({
     content: [],
     // Store product info for reference
     productLinks: productLinks.map(p => ({
-      _type: 'object',
+      _type: 'productItem',
       _key: generateKey(),
       name: p.name,
       brand: p.brand,
+      productType: p.productType || null,
+      originalUrl: p.originalUrl || null,
       amazonUrl: p.amazonUrl || null,
       shopmyUrl: p.shopmyUrl || null,
-      needsShopmy: !p.shopmyUrl
+      hasShopmy: p.shopmyUrl ? 'yes' : 'pending',
+      hasAmazon: p.amazonUrl ? 'yes' : 'pending',
+      suggestedAmazonSearch: p.amazonUrl ? null : `https://www.amazon.com/s?k=${encodeURIComponent((p.brand || '') + ' ' + (p.name || ''))}`,
+      reviewed: false,
     })),
     suggestedTags: analysis.suggestedTags || [],
     status: 'draft', // Always create as draft for Kyndall to review
@@ -107,6 +158,11 @@ export async function createDraftBlogPost({
       platform: video.platform,
       publishedAt: video.publishedAt
     }
+  }
+  
+  // Add thumbnail image if upload was successful
+  if (thumbnailImage) {
+    doc.thumbnail = thumbnailImage
   }
   
   const result = await client.create(doc)
