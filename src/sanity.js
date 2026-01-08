@@ -20,6 +20,8 @@ async function uploadImageFromUrl(imageUrl, filename) {
   if (!client || !imageUrl) return null
   
   try {
+    console.log('   Fetching thumbnail from:', imageUrl.substring(0, 60) + '...')
+    
     // Fetch the image
     const response = await fetch(imageUrl)
     if (!response.ok) {
@@ -27,16 +29,19 @@ async function uploadImageFromUrl(imageUrl, filename) {
       return null
     }
     
-    const buffer = await response.arrayBuffer()
-    const blob = new Blob([buffer])
+    // Get as array buffer and convert to Node.js Buffer
+    const arrayBuffer = await response.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
     
-    // Upload to Sanity
-    const asset = await client.assets.upload('image', blob, {
+    console.log('   Thumbnail fetched, size:', buffer.length, 'bytes')
+    
+    // Upload to Sanity using Buffer (works in Node.js)
+    const asset = await client.assets.upload('image', buffer, {
       filename: filename || 'thumbnail.jpg',
       contentType: response.headers.get('content-type') || 'image/jpeg'
     })
     
-    console.log('   ✓ Thumbnail uploaded to Sanity')
+    console.log('   ✓ Thumbnail uploaded to Sanity, asset ID:', asset._id)
     
     return {
       _type: 'image',
@@ -46,7 +51,7 @@ async function uploadImageFromUrl(imageUrl, filename) {
       }
     }
   } catch (error) {
-    console.log('   Could not upload thumbnail:', error.message)
+    console.log('   ✗ Could not upload thumbnail:', error.message)
     return null
   }
 }
@@ -69,11 +74,18 @@ export async function createDraftBlogPost({
   // Upload thumbnail image to Sanity
   let thumbnailImage = null
   if (video.thumbnail) {
-    console.log('   Uploading thumbnail...')
+    console.log('   Video thumbnail URL:', video.thumbnail)
     thumbnailImage = await uploadImageFromUrl(
       video.thumbnail, 
       `${video.id}-thumbnail.jpg`
     )
+    if (thumbnailImage) {
+      console.log('   ✓ Thumbnail ready to save:', JSON.stringify(thumbnailImage))
+    } else {
+      console.log('   ✗ Thumbnail upload failed, will use thumbnailUrl fallback')
+    }
+  } else {
+    console.log('   ⚠ No thumbnail URL provided by video')
   }
   
   // Build the HTML content with product links inserted
@@ -179,9 +191,14 @@ export async function createDraftBlogPost({
   // Add thumbnail image if upload was successful
   if (thumbnailImage) {
     doc.thumbnail = thumbnailImage
+    console.log('   ✓ Thumbnail added to document')
+  } else {
+    console.log('   ⚠ No thumbnail image, using thumbnailUrl only:', doc.thumbnailUrl ? 'yes' : 'no')
   }
   
+  console.log('   Creating blog post in Sanity...')
   const result = await client.create(doc)
+  console.log('   ✓ Blog post created:', result._id)
   return result
 }
 
