@@ -122,6 +122,10 @@ export async function createDraftBlogPost({
   // Also handle any remaining product links that weren't matched (fallback)
   htmlContent = htmlContent.replace(/<a href="#product-\d+"[^>]*class="product-link"[^>]*>([^<]+)<\/a>/gi, '<strong class="product-name">$1</strong>')
   
+  // Convert HTML to Portable Text (Rich Text) for Sanity
+  const portableTextContent = convertHtmlToPortableText(htmlContent)
+  console.log('   ✓ Converted HTML to Rich Text:', portableTextContent.length, 'blocks')
+  
   // Create the blog post document
   // Determine aspect ratio based on platform
   let aspectRatio = 'landscape' // default for YouTube
@@ -156,11 +160,14 @@ export async function createDraftBlogPost({
     videoId: video.id,
     // Also store YouTube thumbnail URL as backup
     thumbnailUrl: video.thumbnail || null,
-    // Use HTML content format for auto-generated posts
-    contentFormat: 'html',
+    // Use Rich Text format - converted from HTML
+    contentFormat: 'richtext',
+    // Portable Text content (editable in Sanity's rich text editor)
+    content: portableTextContent,
+    // Keep HTML synced with content
     htmlContent: htmlContent,
-    // Keep content array empty for now (could convert later if needed)
-    content: [],
+    // Store original HTML for "Revert to Original" feature
+    originalHtmlContent: htmlContent,
     // Store product info for reference
     productLinks: productLinks.map(p => ({
       _type: 'productItem',
@@ -304,4 +311,157 @@ function generateSlug(title) {
 
 function generateKey() {
   return Math.random().toString(36).substring(2, 10)
+}
+
+// Convert HTML to Sanity Portable Text (Rich Text)
+function convertHtmlToPortableText(html) {
+  if (!html) return []
+  
+  const blocks = []
+  
+  // Split by block-level elements
+  // Match: <h2>...</h2>, <h3>...</h3>, <h4>...</h4>, <p>...</p>, <blockquote>...</blockquote>
+  const blockPattern = /<(h2|h3|h4|p|blockquote)[^>]*>([\s\S]*?)<\/\1>/gi
+  
+  let match
+  while ((match = blockPattern.exec(html)) !== null) {
+    const tagName = match[1].toLowerCase()
+    const innerHtml = match[2]
+    
+    // Determine block style
+    let style = 'normal'
+    if (tagName === 'h2') style = 'h2'
+    else if (tagName === 'h3') style = 'h3'
+    else if (tagName === 'h4') style = 'h4'
+    else if (tagName === 'blockquote') style = 'blockquote'
+    
+    // Parse inline content (text, bold, italic, links)
+    const { children, markDefs } = parseInlineContent(innerHtml)
+    
+    if (children.length > 0) {
+      blocks.push({
+        _type: 'block',
+        _key: generateKey(),
+        style: style,
+        markDefs: markDefs,
+        children: children
+      })
+    }
+  }
+  
+  // If no blocks found, treat entire content as one paragraph
+  if (blocks.length === 0 && html.trim()) {
+    const { children, markDefs } = parseInlineContent(html)
+    if (children.length > 0) {
+      blocks.push({
+        _type: 'block',
+        _key: generateKey(),
+        style: 'normal',
+        markDefs: markDefs,
+        children: children
+      })
+    }
+  }
+  
+  return blocks
+}
+
+// Parse inline HTML content (bold, italic, links) into Portable Text spans
+function parseInlineContent(html) {
+  const children = []
+  const markDefs = []
+  
+  // Clean up the HTML
+  let content = html
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  
+  if (!content) {
+    return { children: [], markDefs: [] }
+  }
+  
+  // Regex to find inline elements
+  // Matches: <strong>, <b>, <em>, <i>, <a href="...">, and plain text between them
+  const inlinePattern = /<(strong|b|em|i|a)([^>]*)>([\s\S]*?)<\/\1>|([^<]+)/gi
+  
+  let inlineMatch
+  while ((inlineMatch = inlinePattern.exec(content)) !== null) {
+    if (inlineMatch[4]) {
+      // Plain text
+      const text = decodeHtmlEntities(inlineMatch[4].trim())
+      if (text) {
+        children.push({
+          _type: 'span',
+          _key: generateKey(),
+          text: text,
+          marks: []
+        })
+      }
+    } else {
+      // Inline element
+      const tag = inlineMatch[1].toLowerCase()
+      const attrs = inlineMatch[2] || ''
+      const innerText = inlineMatch[3]
+      
+      // Get the text content (strip any nested tags for simplicity)
+      const plainText = decodeHtmlEntities(innerText.replace(/<[^>]*>/g, '').trim())
+      
+      if (!plainText) continue
+      
+      const marks = []
+      
+      if (tag === 'strong' || tag === 'b') {
+        marks.push('strong')
+      } else if (tag === 'em' || tag === 'i') {
+        marks.push('em')
+      } else if (tag === 'a') {
+        // Extract href from attributes
+        const hrefMatch = attrs.match(/href=["']([^"']+)["']/i)
+        if (hrefMatch) {
+          const linkKey = generateKey()
+          markDefs.push({
+            _type: 'link',
+            _key: linkKey,
+            href: hrefMatch[1]
+          })
+          marks.push(linkKey)
+        }
+      }
+      
+      children.push({
+        _type: 'span',
+        _key: generateKey(),
+        text: plainText,
+        marks: marks
+      })
+    }
+  }
+  
+  // If nothing was parsed, just add the plain text
+  if (children.length === 0 && content) {
+    const plainText = decodeHtmlEntities(content.replace(/<[^>]*>/g, '').trim())
+    if (plainText) {
+      children.push({
+        _type: 'span',
+        _key: generateKey(),
+        text: plainText,
+        marks: []
+      })
+    }
+  }
+  
+  return { children, markDefs }
+}
+
+// Decode common HTML entities
+function decodeHtmlEntities(text) {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
 }
