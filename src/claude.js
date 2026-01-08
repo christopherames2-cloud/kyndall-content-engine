@@ -4,9 +4,13 @@
 import Anthropic from '@anthropic-ai/sdk'
 
 let client = null
+let amazonAssociateTag = 'kyndallames09-20' // Default tag
 
-export function initClaude(apiKey) {
+export function initClaude(apiKey, associateTag) {
   client = new Anthropic({ apiKey })
+  if (associateTag) {
+    amazonAssociateTag = associateTag
+  }
 }
 
 export async function analyzeVideoContent(video) {
@@ -36,32 +40,30 @@ ${video.description || 'No description'}
 
 VIDEO TAGS: ${video.tags?.join(', ') || 'No tags'}
 
-PRODUCTS ALREADY EXTRACTED FROM DESCRIPTION (with their index numbers):
-${descriptionProducts.length > 0 ? descriptionProducts.map((p, i) => `[${i + 1}] ${p.brand} ${p.name}`).join('\n') : 'None found'}
+PRODUCTS ALREADY EXTRACTED FROM DESCRIPTION (DO NOT MODIFY THESE):
+${descriptionProducts.length > 0 ? JSON.stringify(descriptionProducts, null, 2) : 'None found'}
 
 YOUR TASK:
-1. Generate a blog post about this video in HTML format
+1. Generate a blog post about this video
 2. Suggest SEO metadata
 3. Determine the category
 
-IMPORTANT HTML FORMATTING RULES:
-- Use <h2> for main section headers
-- Use <h3> for sub-headers
-- Use <p> for paragraphs
-- Use <strong> for emphasis (product names, key points)
-- Use <em> for subtle emphasis
-- For product mentions, use: <a href="#product-N" class="product-link">Product Name</a> where N is the product index number from the list above
-- Keep paragraphs concise and scannable
-- Write 200-400 words
-
 NOTE: Products have already been extracted from the description. Do NOT add or modify products.
+
+CRITICAL FORMATTING RULES:
+- ALWAYS include a space BEFORE and AFTER any formatting change (bold, italic, links)
+- Example WRONG: "I love<strong>this product</strong>so much"
+- Example RIGHT: "I love <strong>this product</strong> so much"
+- Example WRONG: "Check out[PRODUCT_LINK:Serum]for glowing skin"
+- Example RIGHT: "Check out [PRODUCT_LINK:Serum] for glowing skin"
+- This applies to ALL inline formatting - never let formatted text touch unformatted text
 
 Respond with ONLY valid JSON (no markdown, no backticks):
 {
   "category": "makeup|skincare|fashion|lifestyle|travel",
   "blogTitle": "Engaging blog title (50-60 chars)",
   "blogExcerpt": "Brief compelling summary (150-160 chars)",
-  "blogContent": "<h2>Section</h2><p>HTML formatted blog post with <a href=\\"#product-1\\" class=\\"product-link\\">Product Name</a> links...</p>",
+  "blogContent": "Full blog post (200-400 words) with [PRODUCT_LINK:Product Name] placeholders where products should be linked. REMEMBER: spaces around ALL formatting!",
   "seoTitle": "SEO optimized title (50-60 chars)",
   "seoDescription": "Meta description for search engines (150-160 chars)",
   "suggestedTags": ["tag1", "tag2", "tag3"]
@@ -89,6 +91,11 @@ Respond with ONLY valid JSON (no markdown, no backticks):
     }
 
     const analysis = JSON.parse(cleanText)
+    
+    // Fix any spacing issues around formatting (safety net)
+    if (analysis.blogContent) {
+      analysis.blogContent = fixFormattingSpaces(analysis.blogContent)
+    }
     
     // Use the products we already extracted - don't trust Claude's extraction
     analysis.products = descriptionProducts
@@ -120,118 +127,29 @@ function extractProductsFromDescription(description) {
   
   if (!description) return products
 
-  // Comprehensive beauty brands list for identification
+  // Common beauty brands for identification
   const beautyBrands = [
-    // Prestige Makeup
     'Benefit Cosmetics', 'Benefit', 'Kylie Cosmetics', 'Kylie', 'Summer Fridays',
-    'Pat McGrath Labs', 'Pat McGrath', 'MAC Cosmetics', 'MAC', 'Patrick Ta', 
-    'Fenty Beauty', 'Fenty', 'Kosas', 'Make Up For Ever', 'MUFE', 'Bobbi Brown', 
-    'Rare Beauty', 'Charlotte Tilbury', 'NARS', 'Too Faced', 'Urban Decay', 'Tarte',
+    'Pat McGrath Labs', 'Pat McGrath', 'MAC', 'Patrick Ta', 'Fenty Beauty', 'Fenty',
+    'Kosas', 'Make Up For Ever', 'MUFE', 'Bobbi Brown', 'Rare Beauty',
+    'Charlotte Tilbury', 'NARS', 'Too Faced', 'Urban Decay', 'Tarte',
     'Glossier', 'Milk Makeup', 'Ilia', 'Tower 28', 'Merit', 'Saie',
-    'Makeup By Mario', 'Laura Mercier', 'Hourglass', 'Armani Beauty', 'Giorgio Armani',
-    'YSL Beauty', 'YSL', 'Dior Beauty', 'Dior', 'Chanel', 'Estée Lauder', 'Estee Lauder',
-    'Clinique', 'Lancôme', 'Lancome', 'Smashbox', 'Natasha Denona', 'Tom Ford Beauty', 
-    'Tom Ford', 'Gucci Beauty', 'Valentino Beauty', 'Givenchy', 'Westman Atelier',
-    'Victoria Beckham Beauty', 'Rose Inc', 'Jones Road', 'About Face', 'One Size', 
-    'One/Size', 'Danessa Myricks', 'Lisa Eldridge', 'KVD Beauty', 'KVD', 
-    'Kvd Vegan Beauty', 'Anastasia Beverly Hills', 'ABH', 'Huda Beauty', 'CT', 'PMG',
-    
-    // Drugstore Makeup
-    'e.l.f. Cosmetics', 'e.l.f.', 'elf Cosmetics', 'elf', 'ELF', 'NYX Professional', 
-    'NYX Cosmetics', 'NYX', 'Maybelline New York', 'Maybelline', 'L\'Oréal Paris', 
-    'L\'Oreal Paris', 'L\'Oréal', 'L\'Oreal', 'Loreal', 'Revlon', 'CoverGirl', 'Cover Girl',
-    'Milani', 'ColourPop Cosmetics', 'ColourPop', 'Colour Pop', 'Wet n Wild', 'Wet \'n Wild',
-    'Essence Cosmetics', 'Essence', 'Catrice', 'Physicians Formula', 'Flower Beauty',
-    'Makeup Revolution', 'Revolution Beauty', 'Morphe', 'BH Cosmetics',
-    
-    // Skincare - Prestige
-    'The Ordinary', 'Ordinary', 'Drunk Elephant', 'Tatcha', 'Sunday Riley', 'Supergoop!', 
-    'Supergoop', 'La Mer', 'SK-II', 'SK-2', 'SKII', 'Augustinus Bader', 
-    'Dr. Barbara Sturm', 'Barbara Sturm', 'SkinCeuticals', 'Skinceuticals', 'iS Clinical',
-    'Biologique Recherche', 'Vintner\'s Daughter', 'Summer Fridays', 'Rhode Skin', 'Rhode',
-    'Kiehl\'s', 'Kiehls', 'Fresh Beauty', 'Fresh', 'Origins', 'Shiseido', 'Clarins', 
-    'Sisley Paris', 'Sisley', 'La Prairie', 'Caudalie', 'Herbivore Botanicals', 'Herbivore',
-    'Youth to the People', 'YTTP', 'Glow Recipe', 'Farmacy Beauty', 'Farmacy', 
-    'Versed Skincare', 'Versed', 'Kinship', 'Osea', 'Tula Skincare', 'Tula', 'Dermalogica',
-    'Peter Thomas Roth', 'PTR', 'Ole Henriksen', 'Murad', 'Dr. Dennis Gross', 
-    'Dr Dennis Gross', 'Kate Somerville', 'Elemis', 'Ren Clean Skincare', 'REN', 
-    'First Aid Beauty', 'FAB', 'Josie Maran', 'Biossance', 'Caudalie',
-    
-    // Skincare - Drugstore & Affordable
-    'CeraVe', 'La Roche-Posay', 'La Roche Posay', 'LRP', 'Paula\'s Choice', 'Paulas Choice',
-    'Good Molecules', 'The Inkey List', 'Inkey List', 'INKEY', 'Naturium', 
-    'Aveeno', 'Neutrogena', 'Olay', 'Eucerin', 'Cetaphil', 'Vanicream', 'Aquaphor',
-    'Differin', 'Cerave', 'Garnier', 'Bioderma', 'Vichy', 'Avene', 'Avène',
-    
-    // Korean Beauty (K-Beauty)
-    'Skin1004', 'SKIN1004', 'COSRX', 'Cosrx', 'Innisfree', 'Laneige', 'Sulwhasoo',
-    'Beauty of Joseon', 'Anua', 'ANUA', 'Isntree', 'ISNTREE', 'Torriden', 'TORRIDEN',
-    'Round Lab', 'Roundlab', 'ROUND LAB', 'Missha', 'MISSHA', 'Etude House', 'Etude', 'ETUDE',
-    'Tony Moly', 'TonyMoly', 'TONYMOLY', 'Holika Holika', 'Banila Co', 'BANILA CO',
-    'Neogen', 'NEOGEN', 'Dear Klairs', 'Klairs', 'KLAIRS', 'Purito', 'PURITO', 
-    'Some By Mi', 'SOME BY MI', 'Benton', 'BENTON', 'Heimish', 'HEIMISH', 
-    'Pyunkang Yul', 'I\'m From', 'Im From', 'I\'M FROM', 'Medicube', 'MEDICUBE',
-    'Dr. Jart+', 'Dr. Jart', 'Dr Jart', 'DR. JART+', 'Amorepacific', 'AMOREPACIFIC',
-    'Hera', 'HERA', 'Iope', 'IOPE', 'Primera', 'PRIMERA', 'Mamonde', 'MAMONDE',
-    'Belif', 'BELIF', 'VDL', 'Peach & Lily', 'Peach and Lily', 'Then I Met You',
-    'Soko Glam', 'Numbuzin', 'NUMBUZIN', 'Axis-Y', 'AXIS-Y', 'Haruharu Wonder', 
-    'HARUHARU WONDER', 'By Wishtrend', 'BY WISHTREND', 'Wishtrend', 'TIRTIR', 'Tirtir',
-    'Rom&nd', 'Romand', 'ROM&ND', 'ROMAND', 'Peripera', 'PERIPERA', 'Clio', 'CLIO',
-    'Espoir', 'ESPOIR', 'Moonshot', 'MOONSHOT', 'Amuse', 'AMUSE', 'Dasique', 'DASIQUE',
-    'Wakemake', 'WAKEMAKE', 'Apieu', 'A\'PIEU', 'Tocobo', 'TOCOBO', 'Mixsoon', 'MIXSOON',
-    'Abib', 'ABIB', 'Goodal', 'GOODAL', 'One Thing', 'ONE THING', 'Rovectin', 'ROVECTIN',
-    'Celimax', 'CELIMAX', 'Thank You Farmer', 'Mizon', 'MIZON', 'Skinfood', 'SKINFOOD',
-    
-    // Japanese Beauty (J-Beauty)
-    'Shiseido', 'SHISEIDO', 'Tatcha', 'DHC', 'Hada Labo', 'HADA LABO', 'Rohto', 
-    'Bioré', 'Biore', 'BIORE', 'Canmake', 'CANMAKE', 'Kose', 'KOSE', 'Kosé',
-    'Sofina', 'SOFINA', 'Shu Uemura', 'SHU UEMURA', 'Three Cosmetics', 'THREE',
-    'Suqqu', 'SUQQU', 'Decorte', 'DECORTE', 'Cosme Decorte', 'RMK', 'Lunasol', 'LUNASOL',
-    'Addiction Beauty', 'ADDICTION', 'Kate Tokyo', 'KATE', 'Integrate', 'Majolica Majorca',
-    'Anessa', 'ANESSA', 'Allie', 'ALLIE', 'Senka', 'SENKA', 'Curel', 'Curél',
-    'Melano CC', 'Kikumasamune', 'Naturie', 'Lululun', 'Muji', 'MUJI',
-    
-    // Haircare
-    'Olaplex', 'OLAPLEX', 'Dyson', 'Moroccan Oil', 'Moroccanoil', 'MOROCCANOIL',
-    'Ouai', 'OUAI', 'Oribe', 'ORIBE', 'Kerastase', 'Kérastase', 'KERASTASE',
-    'Sol de Janeiro', 'SOL DE JANEIRO', 'Gisou', 'GISOU', 'Amika', 'amika', 'AMIKA',
-    'Briogeo', 'BRIOGEO', 'Verb', 'VERB', 'Living Proof', 'LIVING PROOF', 'Drybar', 'DRYBAR',
-    'Christophe Robin', 'Bumble and Bumble', 'Bumble and bumble', 'Davines', 'DAVINES',
-    'R+Co', 'R + Co', 'IGK', 'K18', 'Curlsmith', 'CURLSMITH', 'DevaCurl', 'DEVACURL',
-    'SheaMoisture', 'Shea Moisture', 'Cantu', 'CANTU', 'Pattern Beauty', 'Pattern', 
-    'Mielle', 'MIELLE', 'Carol\'s Daughter', 'Aussie', 'OGX', 'Garnier Fructis',
-    'Herbal Essences', 'Pantene', 'TRESemmé', 'Tresemme', 'Head & Shoulders',
-    'Color Wow', 'COLOR WOW', 'Redken', 'REDKEN', 'Matrix', 'Kenra', 'Joico',
-    
-    // Fragrance
-    'Jo Malone', 'Jo Malone London', 'Diptyque', 'DIPTYQUE', 'Le Labo', 'LE LABO',
-    'Byredo', 'BYREDO', 'Maison Margiela', 'Replica', 'REPLICA', 'Tom Ford', 
-    'Chanel', 'CHANEL', 'Dior', 'DIOR', 'YSL', 'Gucci', 'GUCCI', 'Prada', 'PRADA',
-    'Versace', 'VERSACE', 'Dolce & Gabbana', 'D&G', 'Valentino', 'VALENTINO',
-    'Burberry', 'BURBERRY', 'Marc Jacobs', 'MARC JACOBS', 'Clean Reserve', 'CLEAN',
-    'Juliette Has a Gun', 'Kayali', 'KAYALI', 'Ariana Grande', 'Billie Eilish',
-    'Sol de Janeiro', 'Brazilian Bum Bum', 'Glossier You', 'Dedcool', 'DEDCOOL',
-    'Maison Francis Kurkdjian', 'MFK', 'Creed', 'CREED', 'Parfums de Marly',
-    
-    // Tools & Devices
-    'Dyson', 'DYSON', 'GHD', 'ghd', 'T3', 'T3 Micro', 'BaByliss', 'Babyliss', 
-    'Hot Tools', 'HOT TOOLS', 'Bio Ionic', 'BIO IONIC', 'Drybar',
-    'NuFace', 'NuFACE', 'NUFACE', 'Foreo', 'FOREO', 'PMD', 'Dermaflash', 'DERMAFLASH',
-    'Ziip', 'ZIIP', 'Solawave', 'SOLAWAVE', 'CurrentBody', 'Current Body',
-    'Beautyblender', 'Beauty Blender', 'BEAUTYBLENDER', 'Real Techniques', 
-    'Sigma Beauty', 'Sigma', 'SIGMA', 'Artis', 'ARTIS', 'Sephora Collection',
-    'IT Cosmetics', 'IT Brushes', 'EcoTools', 'Tweezerman', 'Revlon Tools'
+    'Makeup By Mario', 'Laura Mercier', 'Hourglass', 'Armani', 'YSL', 'Dior', 'Chanel',
+    'Estée Lauder', 'Clinique', 'Lancôme', 'Smashbox', 'e.l.f.', 'elf', 'NYX',
+    'Maybelline', 'L\'Oréal', 'Revlon', 'CoverGirl', 'The Ordinary', 'Drunk Elephant',
+    'Tatcha', 'Sunday Riley', 'Supergoop', 'La Mer', 'SK-II', 'Olaplex', 'Dyson',
+    'Moroccan Oil', 'Ouai', 'Sol de Janeiro', 'Gisou', 'Rhode', 'Kiehl\'s',
+    'CeraVe', 'La Roche-Posay', 'Paula\'s Choice', 'Good Molecules', 'Anastasia Beverly Hills',
+    'ABH', 'Huda Beauty', 'Natasha Denona', 'CT', 'PMG'
   ]
 
   // METHOD 1: Look for "PRODUCTS:" section (most reliable for Kyndall's format)
-  // Format: "Product Name - https://go.shopmy.us/..." separated by spaces or newlines
   const productsMatch = description.match(/PRODUCTS?:?\s*([\s\S]*?)(?=\n\n|\nFOLLOW|\nSUBSCRIBE|\nBUSINESS|\nMUSIC|\n[A-Z]{2,}:|$)/i)
   
   if (productsMatch) {
     const productsSection = productsMatch[1]
     console.log(`      Found PRODUCTS section`)
     
-    // Split by URL pattern to get each product
     // Match: "Product Name - URL" or "Product Name URL"
     const productPattern = /([^-\n]+(?:\s+"[^"]+")?\s*)-?\s*(https?:\/\/[^\s]+)/g
     let match
@@ -243,14 +161,16 @@ function extractProductsFromDescription(description) {
       // Parse brand and product name
       const { brand, name } = extractBrandAndName(fullProductName, beautyBrands)
       
-      // Determine URL type
+      // Determine URL type and process accordingly
       let shopmyUrl = null
       let amazonUrl = null
       
       if (url.includes('shopmy.us') || url.includes('go.shopmy.us') || url.includes('shop-links.co')) {
+        // ShopMy link - use as-is (already has affiliate tracking)
         shopmyUrl = url
       } else if (url.includes('amazon.com') || url.includes('amzn.to') || url.includes('amzn.com')) {
-        amazonUrl = url
+        // Amazon link - add associate tag for affiliate credit
+        amazonUrl = addAmazonAssociateTag(url)
       }
       
       products.push({
@@ -301,7 +221,7 @@ function extractProductsFromDescription(description) {
         if (url.includes('shopmy.us') || url.includes('go.shopmy.us') || url.includes('shop-links.co')) {
           shopmyUrl = url
         } else if (url.includes('amazon.com') || url.includes('amzn.to') || url.includes('amzn.com')) {
-          amazonUrl = url
+          amazonUrl = addAmazonAssociateTag(url)
         }
         
         // Only add if it's an affiliate link we recognize
@@ -330,65 +250,59 @@ function extractProductsFromDescription(description) {
   })
 }
 
+// Add Amazon Associate tag to URL for affiliate credit
+function addAmazonAssociateTag(url) {
+  try {
+    // Handle amzn.to short links - can't modify, but they should already have tracking
+    if (url.includes('amzn.to')) {
+      console.log(`        ℹ️  Short Amazon link (amzn.to) - using as-is`)
+      return url
+    }
+    
+    const urlObj = new URL(url)
+    
+    // Check if tag already exists
+    if (urlObj.searchParams.has('tag')) {
+      const existingTag = urlObj.searchParams.get('tag')
+      console.log(`        ℹ️  Amazon link already has tag: ${existingTag}`)
+      return url
+    }
+    
+    // Add the associate tag
+    urlObj.searchParams.set('tag', amazonAssociateTag)
+    
+    console.log(`        ✓ Added Amazon Associate tag: ${amazonAssociateTag}`)
+    return urlObj.toString()
+    
+  } catch (error) {
+    console.log(`        ⚠️  Could not parse Amazon URL, using as-is`)
+    // If URL parsing fails, try simple string append
+    if (url.includes('?')) {
+      return `${url}&tag=${amazonAssociateTag}`
+    } else {
+      return `${url}?tag=${amazonAssociateTag}`
+    }
+  }
+}
+
 function extractBrandAndName(fullProductName, beautyBrands) {
   let brand = 'Unknown'
   let name = fullProductName
   
-  // Clean up the product name first
-  name = name.replace(/^[•\-\*\d.]\s*/, '').trim()
-  
   // Sort brands by length (longest first) to match "Benefit Cosmetics" before "Benefit"
   const sortedBrands = [...beautyBrands].sort((a, b) => b.length - a.length)
   
-  // First, check if it starts with a known brand
   for (const b of sortedBrands) {
     const regex = new RegExp(`^${escapeRegex(b)}\\s+`, 'i')
-    if (regex.test(name)) {
+    if (regex.test(fullProductName)) {
       brand = b
-      name = name.replace(regex, '').trim()
+      name = fullProductName.replace(regex, '').trim()
       break
     }
   }
   
-  // If no brand found, check if brand appears anywhere in the name
-  if (brand === 'Unknown') {
-    for (const b of sortedBrands) {
-      if (name.toLowerCase().includes(b.toLowerCase())) {
-        brand = b
-        // Remove brand from name
-        const brandRegex = new RegExp(escapeRegex(b), 'i')
-        name = name.replace(brandRegex, '').trim()
-        // Clean up any leftover separators
-        name = name.replace(/^[\s\-–:]+/, '').trim()
-        break
-      }
-    }
-  }
-  
-  // If still unknown, try to intelligently parse the first word as a brand
-  if (brand === 'Unknown') {
-    const words = fullProductName.trim().split(/\s+/)
-    if (words.length >= 2) {
-      const firstWord = words[0]
-      // Check if first word looks like a brand (capitalized, not common word)
-      const commonWords = ['the', 'a', 'an', 'my', 'best', 'new', 'mini', 'full', 'travel', 'size', 'set', 'kit']
-      if (!commonWords.includes(firstWord.toLowerCase()) && 
-          firstWord[0] === firstWord[0].toUpperCase() &&
-          firstWord.length > 2) {
-        // Looks like it could be a brand
-        brand = firstWord
-        name = words.slice(1).join(' ')
-      }
-    }
-  }
-  
   // Clean up name - remove quotes around shade names but keep the shade
-  name = name.replace(/"/g, '').trim()
-  
-  // If name is empty after extraction, use original
-  if (!name) {
-    name = fullProductName.replace(/"/g, '').trim()
-  }
+  name = name.replace(/"/g, '')
   
   return { brand, name }
 }
@@ -405,36 +319,30 @@ function guessProductType(text) {
       lower.includes('lipstick') || lower.includes('lip ') || lower.includes('mascara') ||
       lower.includes('eyeliner') || lower.includes('eyeshadow') || lower.includes('brow') ||
       lower.includes('primer') || lower.includes('setting') || lower.includes('contour') ||
-      lower.includes('tint') || lower.includes('pencil') || lower.includes('balm') ||
-      lower.includes('gloss') || lower.includes('liner') || lower.includes('lash')) {
+      lower.includes('tint') || lower.includes('pencil') || lower.includes('balm')) {
     return 'makeup'
   }
   
   if (lower.includes('serum') || lower.includes('moisturizer') || lower.includes('cleanser') ||
       lower.includes('toner') || lower.includes('sunscreen') || lower.includes('spf') ||
       lower.includes('retinol') || lower.includes('vitamin c') || lower.includes('mask') ||
-      lower.includes('exfoliant') || lower.includes('cream') || lower.includes('lotion') ||
-      lower.includes('essence') || lower.includes('ampoule') || lower.includes('oil') ||
-      lower.includes('mist') || lower.includes('centella') || lower.includes('hyaluronic') ||
-      lower.includes('niacinamide') || lower.includes('aha') || lower.includes('bha')) {
+      lower.includes('exfoliant') || lower.includes('cream') || lower.includes('lotion')) {
     return 'skincare'
   }
   
   if (lower.includes('shampoo') || lower.includes('conditioner') || lower.includes('hair') ||
-      lower.includes('styling') || lower.includes('olaplex') || lower.includes('scalp') ||
-      lower.includes('leave-in') || lower.includes('treatment')) {
+      lower.includes('oil') || lower.includes('styling') || lower.includes('olaplex')) {
     return 'haircare'
   }
   
   if (lower.includes('perfume') || lower.includes('fragrance') || lower.includes('cologne') ||
-      lower.includes('body mist') || lower.includes('eau de') || lower.includes('parfum')) {
+      lower.includes('body mist') || lower.includes('eau de')) {
     return 'fragrance'
   }
   
   if (lower.includes('brush') || lower.includes('sponge') || lower.includes('curler') ||
       lower.includes('dryer') || lower.includes('straightener') || lower.includes('dyson') ||
-      lower.includes('mirror') || lower.includes('organizer') || lower.includes('device') ||
-      lower.includes('roller') || lower.includes('gua sha') || lower.includes('led')) {
+      lower.includes('mirror') || lower.includes('organizer')) {
     return 'tools'
   }
   
@@ -457,4 +365,26 @@ function guessCategory(text) {
     return 'travel'
   }
   return 'lifestyle'
+}
+
+// Fix spacing around HTML formatting tags and product links
+function fixFormattingSpaces(content) {
+  if (!content) return content
+  
+  let fixed = content
+  
+  // Add space before opening tags if preceded by a letter/number (not already a space)
+  fixed = fixed.replace(/([a-zA-Z0-9,.'"])(<(?:strong|em|b|i|a|span)[^>]*>)/g, '$1 $2')
+  
+  // Add space after closing tags if followed by a letter/number (not already a space)
+  fixed = fixed.replace(/(<\/(?:strong|em|b|i|a|span)>)([a-zA-Z0-9])/g, '$1 $2')
+  
+  // Fix product link placeholders: [PRODUCT_LINK:Name]
+  fixed = fixed.replace(/([a-zA-Z0-9,.'"])(\[PRODUCT_LINK:)/g, '$1 $2')
+  fixed = fixed.replace(/(\])([a-zA-Z0-9])/g, '$1 $2')
+  
+  // Clean up any double spaces we might have created
+  fixed = fixed.replace(/  +/g, ' ')
+  
+  return fixed
 }
