@@ -39,8 +39,8 @@ const config = {
   },
   checkInterval: parseInt(process.env.CHECK_INTERVAL_MINUTES) || 60,
   // On first run, fetch ALL videos. After that, just check for new ones.
-  maxVideosFirstRun: parseInt(process.env.MAX_VIDEOS_FIRST_RUN) || 1,
-  maxVideosRegular: parseInt(process.env.MAX_VIDEOS_REGULAR) || 1
+  maxVideosFirstRun: parseInt(process.env.MAX_VIDEOS_FIRST_RUN) || 5,
+  maxVideosRegular: parseInt(process.env.MAX_VIDEOS_REGULAR) || 5
 }
 
 // Track if this is first run
