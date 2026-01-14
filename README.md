@@ -1,154 +1,249 @@
-# 🤖 Kyndall Content Engine
+# Kyndall Site Updates - Phase 1 & 2
 
-Automatically generates SEO-optimized blog posts from Kyndall's YouTube videos.
-
-## What It Does
-
-```
-Kyndall posts YouTube video
-         ↓
-   Engine detects it (hourly)
-         ↓
-   Claude analyzes content
-   - Extracts products mentioned
-   - Determines category
-   - Writes SEO blog post
-         ↓
-   Finds affiliate links
-   - Checks ShopMy first
-   - Falls back to Amazon
-         ↓
-   Creates DRAFT in Sanity
-         ↓
-   Kyndall reviews & publishes
-```
-
-## Kyndall's Workflow
-
-1. **Post video to YouTube** (as normal)
-2. **Wait 1 hour** (engine runs hourly)
-3. **Open Sanity Studio** → See new draft posts marked with 🤖
-4. **Review the post:**
-   - Check category is correct
-   - Verify product links
-   - Add any missing ShopMy links (flagged with ⚠️)
-5. **Change status to Published**
-6. **Done!** Post is live on her website
-
-## Setup Instructions
-
-### 1. Get Your API Keys
-
-| Service | How to Get |
-|---------|------------|
-| **YouTube API** | [Google Cloud Console](https://console.cloud.google.com/) → Create project → Enable YouTube Data API v3 → Create credentials |
-| **YouTube Channel ID** | Go to your YouTube channel → View page source → Search for "channelId" |
-| **Claude API** | [Anthropic Console](https://console.anthropic.com/) → API Keys |
-| **ShopMy API** | Email your account manager or support@shopmy.us |
-| **Sanity Write Token** | [sanity.io/manage](https://sanity.io/manage) → Your project → API → Tokens → Add token (with Write access) |
-| **Amazon Associate Tag** | Your Amazon Associates tag (like `kyndallames-20`) |
-
-### 2. Update Sanity Schema
-
-Replace your `sanity/schemas/blogPost.ts` with the contents of `sanity-schema-blogPost.ts` from this folder.
-
-This adds:
-- SEO fields (title, description)
-- Product links tracking
-- Auto-generated flag
-- Better preview in Studio
-
-### 3. Deploy to DigitalOcean
-
-**Option A: As a Worker (Recommended)**
-
-1. Create new App in DigitalOcean
-2. Select your repo
-3. Choose **Worker** (not Web Service)
-4. Add environment variables (see below)
-5. Deploy
-
-**Option B: Add to Existing App**
-
-1. Go to your existing kyndall-site app
-2. Click **Create** → **Create Resources**
-3. Add a **Worker** component
-4. Point to this folder
-5. Add environment variables
-
-### 4. Set Environment Variables
-
-In DigitalOcean App Settings → Environment Variables:
-
-```
-YOUTUBE_API_KEY=AIza...
-YOUTUBE_CHANNEL_ID=UC...
-ANTHROPIC_API_KEY=sk-ant-...
-AMAZON_ASSOCIATE_TAG=kyndallames-20
-SHOPMY_API_TOKEN=your-token (optional)
-SANITY_PROJECT_ID=f9drkp1w
-SANITY_DATASET=production
-SANITY_API_TOKEN=sk...
-CHECK_INTERVAL_MINUTES=60
-```
-
-## Local Development
-
-```bash
-# Install dependencies
-npm install
-
-# Copy env file
-cp .env.example .env
-# Edit .env with your values
-
-# Run once (for testing)
-npm run run-once
-
-# Run continuously
-npm start
-```
-
-## What Gets Created
-
-Each draft blog post includes:
-
-- **SEO Title** - Optimized for search (60 chars)
-- **SEO Description** - Meta description (155 chars)
-- **Blog Content** - Full article with product mentions
-- **Product Links:**
-  - ✓ ShopMy link (if found)
-  - ✓ Amazon affiliate link
-  - ⚠️ Flag if needs ShopMy link
-- **Source Info:**
-  - Platform (YouTube/TikTok/IG)
-  - Original video link
-  - View count
-- **Category** - Auto-suggested (Kyndall can change)
-
-## Troubleshooting
-
-**Engine not detecting new videos?**
-- Check YouTube API key is valid
-- Verify Channel ID is correct
-- Look at logs in DigitalOcean
-
-**Products not found on ShopMy?**
-- These are flagged with ⚠️ in Sanity
-- Kyndall can add to ShopMy, then update the post
-
-**Posts not showing on site?**
-- Check status is "Published" (not Draft)
-- Wait 60 seconds for cache refresh
-
-## Future Enhancements
-
-- [ ] TikTok integration (when API available)
-- [ ] Instagram integration
-- [ ] Auto-add products to ShopMy
-- [ ] Thumbnail auto-upload to Sanity
-- [ ] Slack notifications for new drafts
+This package contains updates to the Sanity CMS schemas for:
+1. **Blog Post enhancements** (Feature in Videos, Do Not Include status)
+2. **New Article schema** (GEO-optimized SEO content)
 
 ---
 
-Built with 💕 for Kyndall Ames
+## 📦 What's Included
+
+### Files to Update/Add in `kyndall-site` repo:
+
+| File | Action | Description |
+|------|--------|-------------|
+| `sanity/schemas/blogPost.ts` | **REPLACE** | Updated with new fields |
+| `sanity/schemas/article.ts` | **NEW** | GEO-optimized article schema |
+| `sanity/schemas/index.ts` | **REPLACE** | Includes article export |
+| `sanity/structure.ts` | **REPLACE** | Adds "Tips & Trends" to studio |
+
+---
+
+## ✨ New Features
+
+### 1. Blog Post: "Feature in Videos" Toggle
+
+**Field:** `featureInVideos` (boolean)  
+**Location:** Media group  
+**Purpose:** When enabled, the blog post's thumbnail appears in the homepage Videos section.
+
+```
+In Sanity Studio:
+📝 Blog Posts → [Your Post] → Media tab → 🎬 Feature in Videos Section ✅
+```
+
+**Frontend Query Update Needed:**
+```groq
+// In your videos section query, add:
+*[_type == "blogPost" && status == "published" && featureInVideos == true] | order(publishedAt desc)[0...6] {
+  title,
+  slug,
+  thumbnail,
+  thumbnailUrl,
+  platform,
+  aspectRatio,
+  videoUrl
+}
+```
+
+### 2. Blog Post: "Do Not Include in Blog" Status
+
+**Field:** `status` with new value `hidden`  
+**Purpose:** Keep posts in Sanity for reference but hide from public blog listing.
+
+**Status Options:**
+- 📝 Draft (`draft`) - Work in progress
+- ✅ Published (`published`) - Live on site
+- 🚫 Do Not Include in Blog (`hidden`) - Hidden from listings
+
+**Frontend Query Update Needed:**
+```groq
+// Update blog listing query to exclude hidden posts:
+*[_type == "blogPost" && status == "published"] | order(publishedAt desc)
+```
+
+### 3. New Article Schema for GEO/SEO
+
+The new `article` schema is specifically designed for AI engine optimization (GEO).
+
+**Key Sections:**
+
+| Section | Purpose | GEO Impact |
+|---------|---------|------------|
+| FAQ Section | Question/Answer pairs | 🔥 HIGH - AI engines extract these directly |
+| Key Takeaways | Quick memorable points | 🔥 HIGH - Perfect for featured snippets |
+| Expert Tips | Pro advice from Kyndall | ⭐ MEDIUM - Establishes authority |
+| Kyndall's Take | Unique perspective | ⭐ MEDIUM - Differentiates from generic content |
+| Related Content | Internal links | ⭐ MEDIUM - SEO juice flow |
+
+**URL Structure:** `/articles/[slug]` (you'll need to create this page)
+
+---
+
+## 🚀 Installation Instructions
+
+### Step 1: Backup Current Files
+```bash
+cd kyndall-site
+cp sanity/schemas/blogPost.ts sanity/schemas/blogPost.ts.backup
+cp sanity/schemas/index.ts sanity/schemas/index.ts.backup
+cp sanity/structure.ts sanity/structure.ts.backup
+```
+
+### Step 2: Copy New Files
+Replace/add these files from this package:
+- `sanity/schemas/blogPost.ts` → Replace existing
+- `sanity/schemas/article.ts` → New file
+- `sanity/schemas/index.ts` → Replace existing
+- `sanity/structure.ts` → Replace existing
+
+### Step 3: Deploy
+```bash
+git add .
+git commit -m "Add Feature in Videos, Do Not Include status, and Article schema"
+git push
+```
+
+DigitalOcean will auto-deploy.
+
+### Step 4: Verify in Sanity Studio
+1. Go to `https://kyndallames.com/studio`
+2. You should see:
+   - 📝 Blog Posts (with new status option and video toggle)
+   - 📰 Tips & Trends (SEO Articles) ← NEW
+
+---
+
+## 🎨 Frontend Changes Needed
+
+### A. Update Blog Query (exclude hidden posts)
+
+In your blog listing component, update the GROQ query:
+
+```typescript
+// Before:
+*[_type == "blogPost"] | order(publishedAt desc)
+
+// After:
+*[_type == "blogPost" && status == "published"] | order(publishedAt desc)
+```
+
+### B. Update Videos Section (include featured blog posts)
+
+```typescript
+// Query for videos section that includes blog posts marked as "Feature in Videos"
+const videosQuery = `
+  *[_type == "blogPost" && status == "published" && featureInVideos == true] | order(publishedAt desc)[0...6] {
+    _id,
+    title,
+    "slug": slug.current,
+    thumbnail,
+    thumbnailUrl,
+    platform,
+    aspectRatio,
+    videoUrl
+  }
+`
+```
+
+### C. Create Article Page (NEW)
+
+You'll need to create `app/articles/[slug]/page.tsx` with:
+- Schema.org Article structured data
+- FAQPage schema for the FAQ section
+- Related content links
+- Social sharing metadata
+
+**Example structured data:**
+```json
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "...",
+  "author": {
+    "@type": "Person",
+    "name": "Kyndall Ames"
+  },
+  "mainEntity": {
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "...",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "..."
+        }
+      }
+    ]
+  }
+}
+```
+
+### D. Add Navigation Link
+
+In your nav component, add:
+```typescript
+<Link href="/articles">Tips & Trends</Link>
+```
+
+### E. Optional: Homepage "Trending Now" Section
+
+Add a section showing latest 3 articles:
+```typescript
+const trendingQuery = `
+  *[_type == "article" && status == "published"] | order(publishedAt desc)[0...3] {
+    _id,
+    title,
+    "slug": slug.current,
+    excerpt,
+    featuredImage,
+    category,
+    faqSection[0..2]
+  }
+`
+```
+
+---
+
+## 📊 Preview in Sanity Studio
+
+After installation, you'll see these preview indicators:
+
+**Blog Posts:**
+- ✅ 🤖 🎬 Post Title - Published, auto-generated, featured in videos
+- 📝 🤖 Post Title - Draft, auto-generated
+- 🚫 Post Title - Hidden from blog
+
+**Articles:**
+- ✅ 🤖 🎵 Article Title - Published, auto-generated from TikTok trend
+- 📝 Article Title | 5 FAQs - Draft with FAQ count
+
+---
+
+## 🔜 Phase 3: kyndall-blog-engine
+
+The next phase will create a separate application that:
+1. Fetches trending topics from TikTok & YouTube daily at 4am PST
+2. Generates 5 draft articles using Claude AI
+3. Auto-links to related blog posts
+4. Creates drafts in Sanity for Kyndall's review
+
+**Required credentials:**
+- TikTok Client Key: `sbaww449c1h77jy01m` ✅
+- TikTok Client Secret: `EsGuahUUjUy9pBHevZL9OfdzN5TDkB4m` ✅
+- YouTube API: Already configured ✅
+- Instagram: Placeholder (future) ⏳
+
+---
+
+## 📝 Notes
+
+- The article schema is designed for GEO (Generative Engine Optimization)
+- FAQ sections are critical for AI citation
+- Key Takeaways work great for featured snippets
+- "Kyndall's Take" adds authenticity and differentiates from AI-generated content
+
+---
+
+Made with 💕 for Kyndall Ames
