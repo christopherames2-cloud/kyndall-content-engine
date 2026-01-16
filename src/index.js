@@ -1,10 +1,13 @@
+// src/index.js
 // Kyndall Content Engine
 // Automatically generates SEO blog posts from social media content
+// Supports: YouTube + TikTok
 // Posts are created as DRAFTS - must be manually reviewed and published
 
 import cron from 'node-cron'
 import http from 'http'
 import { getLatestVideos } from './youtube.js'
+import { getLatestTikTokVideos, initTikTokSanity, getTikTokStatus } from './tiktok.js'
 import { initClaude, analyzeVideoContent } from './claude.js'
 import { 
   initSanity, 
@@ -23,6 +26,10 @@ const config = {
     apiKey: process.env.YOUTUBE_API_KEY,
     channelId: process.env.YOUTUBE_CHANNEL_ID
   },
+  tiktok: {
+    clientKey: process.env.TIKTOK_CLIENT_KEY,
+    clientSecret: process.env.TIKTOK_CLIENT_SECRET
+  },
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY
   },
@@ -39,39 +46,23 @@ const config = {
   },
   checkInterval: parseInt(process.env.CHECK_INTERVAL_MINUTES) || 60,
   // On first run, fetch ALL videos. After that, just check for new ones.
-  maxVideosFirstRun: parseInt(process.env.MAX_VIDEOS_FIRST_RUN) || 5,
+  maxVideosFirstRun: parseInt(process.env.MAX_VIDEOS_FIRST_RUN) || 50,
   maxVideosRegular: parseInt(process.env.MAX_VIDEOS_REGULAR) || 10
 }
 
-// Track if this is first run
+// Track first run
 let isFirstRun = true
 
-// Health check server for DigitalOcean
-const PORT = process.env.PORT || 8080
-let lastRunTime = null
-let stats = { totalProcessed: 0, totalSkipped: 0 }
+// Stats
+const stats = {
+  startTime: new Date(),
+  totalProcessed: 0,
+  totalSkipped: 0,
+  youtubeProcessed: 0,
+  tiktokProcessed: 0
+}
 
-const healthServer = http.createServer((req, res) => {
-  if (req.url === '/health' || req.url === '/') {
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ 
-      status: 'ok', 
-      service: 'kyndall-content-engine',
-      lastRun: lastRunTime,
-      amazonTag: config.amazon.associateTag,
-      stats
-    }))
-  } else {
-    res.writeHead(404)
-    res.end()
-  }
-})
-
-healthServer.listen(PORT, () => {
-  console.log(`🏥 Health check server running on port ${PORT}`)
-})
-
-// Validate required config
+// Basic validation
 function validateConfig() {
   const required = [
     ['YOUTUBE_API_KEY', config.youtube.apiKey],
@@ -81,63 +72,65 @@ function validateConfig() {
   ]
   
   const missing = required.filter(([name, value]) => !value)
+  
   if (missing.length > 0) {
-    console.error('Missing required environment variables:')
-    missing.forEach(([name]) => console.error(`  - ${name}`))
+    console.error('❌ Missing required environment variables:')
+    missing.forEach(([name]) => console.error(`   - ${name}`))
     process.exit(1)
   }
   
-  console.log(`💰 Amazon Associate Tag: ${config.amazon.associateTag}`)
-  console.log(`📺 YouTube Channel: ${config.youtube.channelId}`)
-  
-  if (!config.email.resendApiKey) {
-    console.log('⚠️  RESEND_API_KEY not set - email notifications disabled')
+  // TikTok is optional - just log status
+  if (!config.tiktok.clientKey || !config.tiktok.clientSecret) {
+    console.log('⚠️  TikTok credentials not configured - TikTok import disabled')
+    console.log('   Add TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET to enable')
   }
 }
 
-// Check for expiring discount codes
+// Health check server
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      status: 'healthy',
+      uptime: Math.floor((Date.now() - stats.startTime) / 1000),
+      stats
+    }))
+  } else {
+    res.writeHead(404)
+    res.end()
+  }
+})
+
+server.listen(process.env.PORT || 8080, () => {
+  console.log(`🏥 Health check server on port ${process.env.PORT || 8080}`)
+})
+
+// Check expiring discount codes
 async function checkExpiringCodes(adminSettings) {
-  console.log('\n🏷️  Checking for expiring discount codes...')
-  
   try {
-    const daysAhead = adminSettings?.discountExpirationDays || 14
-    const notificationEmail = adminSettings?.notificationEmail || 'hello@kyndallames.com'
+    const expiringCodes = await getExpiringCodes(7)
     
-    const expiringCodes = await getExpiringCodes(daysAhead)
-    
-    if (expiringCodes.length === 0) {
-      console.log('   No codes expiring soon')
-      return
-    }
-    
-    console.log(`   Found ${expiringCodes.length} codes expiring in next ${daysAhead} days`)
-    
-    if (config.email.resendApiKey) {
-      const emailSent = await sendExpirationEmail(
-        config.email.resendApiKey, 
-        expiringCodes,
-        notificationEmail
-      )
+    if (expiringCodes.length > 0 && config.email.resendApiKey) {
+      console.log(`\n⚠️  Found ${expiringCodes.length} discount codes expiring soon`)
       
-      if (emailSent) {
-        for (const code of expiringCodes) {
+      for (const code of expiringCodes) {
+        if (!code.reminderSent) {
+          const notificationEmail = adminSettings?.notificationEmail || 'hello@kyndallames.com'
+          await sendExpirationEmail(config.email.resendApiKey, code, notificationEmail)
           await markReminderSent(code._id)
+          console.log(`   📧 Sent reminder for ${code.brand} (expires ${code.expiresAt})`)
         }
       }
     }
-    
   } catch (error) {
-    console.error('   Error checking expiring codes:', error.message)
+    console.log('   Could not check expiring codes:', error.message)
   }
 }
 
 // Main processing function
 async function processNewContent() {
-  lastRunTime = new Date().toISOString()
-  
   console.log('\n========================================')
-  console.log(`🔍 Checking for new content - ${lastRunTime}`)
-  console.log(`   Mode: ${isFirstRun ? 'FIRST RUN (fetching all videos)' : 'Regular check'}`)
+  console.log(`🔍 ${isFirstRun ? 'FIRST RUN (fetching all videos)' : 'Regular check'}`)
   console.log('========================================\n')
   
   try {
@@ -157,17 +150,51 @@ async function processNewContent() {
     // 2. Check expiring discount codes
     await checkExpiringCodes(adminSettings)
     
-    // 3. Fetch YouTube videos
-    // On first run, fetch ALL videos. After that, just check recent ones.
+    // 3. Fetch videos from all sources
     const maxVideos = isFirstRun ? config.maxVideosFirstRun : config.maxVideosRegular
+    const allVideos = []
     
+    // --- YouTube ---
     console.log(`\n📺 Fetching up to ${maxVideos} YouTube videos...`)
-    const videos = await getLatestVideos(
-      config.youtube.apiKey,
-      config.youtube.channelId,
-      maxVideos
-    )
-    console.log(`   Found ${videos.length} videos total`)
+    try {
+      const youtubeVideos = await getLatestVideos(
+        config.youtube.apiKey,
+        config.youtube.channelId,
+        maxVideos
+      )
+      console.log(`   Found ${youtubeVideos.length} YouTube videos`)
+      allVideos.push(...youtubeVideos)
+    } catch (error) {
+      console.log(`   ❌ YouTube error: ${error.message}`)
+    }
+    
+    // --- TikTok ---
+    if (config.tiktok.clientKey && config.tiktok.clientSecret) {
+      console.log(`\n🎵 Fetching up to ${maxVideos} TikTok videos...`)
+      
+      // Check TikTok connection status first
+      const tiktokStatus = await getTikTokStatus()
+      
+      if (tiktokStatus.connected) {
+        try {
+          const tiktokVideos = await getLatestTikTokVideos(maxVideos)
+          console.log(`   Found ${tiktokVideos.length} TikTok videos`)
+          allVideos.push(...tiktokVideos)
+        } catch (error) {
+          console.log(`   ❌ TikTok error: ${error.message}`)
+        }
+      } else {
+        console.log(`   ⚠️ ${tiktokStatus.message}`)
+        if (tiktokStatus.expired) {
+          console.log('      Reconnect at: https://kyndallames.com/admin/tiktok')
+        }
+      }
+    }
+    
+    console.log(`\n📊 Total videos to process: ${allVideos.length}`)
+    
+    // Sort by publish date (newest first)
+    allVideos.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))
     
     // 4. Process each video
     let postsCreated = 0
@@ -175,9 +202,13 @@ async function processNewContent() {
     let totalProducts = 0
     let shopmyLinks = 0
     let amazonLinks = 0
+    let youtubeCount = 0
+    let tiktokCount = 0
     
-    for (const video of videos) {
-      console.log(`\n📹 Processing: "${video.title}"`)
+    for (const video of allVideos) {
+      const platformIcon = video.platform === 'tiktok' ? '🎵' : '📺'
+      console.log(`\n${platformIcon} Processing: "${video.title}"`)
+      console.log(`   Platform: ${video.platform}`)
       
       const alreadyProcessed = await checkIfVideoProcessed(video.id)
       if (alreadyProcessed) {
@@ -217,11 +248,17 @@ async function processNewContent() {
       shopmyLinks += withShopmy
       amazonLinks += withAmazon
       
+      // Track by platform
+      if (video.platform === 'tiktok') {
+        tiktokCount++
+      } else {
+        youtubeCount++
+      }
+      
       console.log(`   ✅ Created DRAFT: "${post.title}"`)
       
-      // Send email notification about new draft
+      // Send email notification about new draft (not on first run)
       if (config.email.resendApiKey && !isFirstRun) {
-        // Don't spam emails on first run when processing many videos
         console.log('   📧 Sending notification...')
         await sendNewPostEmail(
           config.email.resendApiKey,
@@ -237,7 +274,7 @@ async function processNewContent() {
       }
       
       // Small delay between processing to avoid rate limits
-      if (videos.length > 5) {
+      if (allVideos.length > 5) {
         await new Promise(resolve => setTimeout(resolve, 1000))
       }
     }
@@ -245,18 +282,19 @@ async function processNewContent() {
     // Update stats
     stats.totalProcessed += postsCreated
     stats.totalSkipped += postsSkipped
+    stats.youtubeProcessed += youtubeCount
+    stats.tiktokProcessed += tiktokCount
     
     console.log('\n✨ Content check complete!')
-    console.log(`   Videos found: ${videos.length}`)
+    console.log(`   Videos found: ${allVideos.length} (📺 YouTube: ${allVideos.filter(v => v.platform !== 'tiktok').length}, 🎵 TikTok: ${allVideos.filter(v => v.platform === 'tiktok').length})`)
     console.log(`   Already processed: ${postsSkipped}`)
-    console.log(`   New drafts created: ${postsCreated}`)
+    console.log(`   New drafts created: ${postsCreated} (📺 ${youtubeCount}, 🎵 ${tiktokCount})`)
     console.log(`   Products found: ${totalProducts}`)
     console.log(`   🛍️  ShopMy links: ${shopmyLinks}`)
     console.log(`   📦 Amazon links: ${amazonLinks}`)
     
     if (isFirstRun && postsCreated > 0) {
-      console.log(`\n📧 Sending summary email for ${postsCreated} new drafts...`)
-      // Could send a summary email here instead of individual ones
+      console.log(`\n📧 First run complete - ${postsCreated} new drafts ready for review`)
     }
     
     // Mark first run as complete
@@ -271,19 +309,24 @@ async function processNewContent() {
 async function main() {
   console.log('🚀 Kyndall Content Engine Starting...\n')
   console.log('📝 All posts are created as DRAFTS')
-  console.log('🛍️  Products extracted from YouTube descriptions')
+  console.log('🛍️  Products extracted from video descriptions')
   console.log('💰 Amazon links get affiliate tag automatically')
-  console.log(`📺 First run will fetch up to ${config.maxVideosFirstRun} videos\n`)
+  console.log(`📺 YouTube: Enabled`)
+  console.log(`🎵 TikTok: ${config.tiktok.clientKey ? 'Enabled (if connected)' : 'Disabled (no credentials)'}`)
+  console.log(`📺 First run will fetch up to ${config.maxVideosFirstRun} videos per platform\n`)
   
   validateConfig()
   
-  // Initialize Claude with Amazon Associate tag
+  // Initialize services
   initClaude(config.anthropic.apiKey, config.amazon.associateTag)
   initSanity(config.sanity.projectId, config.sanity.dataset, config.sanity.token)
   
+  // Initialize TikTok with Sanity client (for token storage)
+  initTikTokSanity(config.sanity.projectId, config.sanity.dataset, config.sanity.token)
+  
   console.log('✅ Services initialized')
   
-  // Get check interval
+  // Get check interval from admin settings
   let checkInterval = config.checkInterval
   try {
     const adminSettings = await getAdminSettings()
@@ -300,6 +343,9 @@ async function main() {
   cron.schedule(cronExpression, processNewContent)
   
   console.log('\n🎯 Content engine running.')
+  console.log('   New YouTube videos → Draft blog posts')
+  console.log('   New TikTok videos → Draft blog posts')
+  console.log('   Kyndall reviews and publishes in Sanity Studio')
 }
 
 main().catch(console.error)
