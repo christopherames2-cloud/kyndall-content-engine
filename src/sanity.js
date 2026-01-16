@@ -1,5 +1,5 @@
-// Sanity CMS Service
-// Creates draft blog posts from analyzed content
+// src/sanity.js
+// Sanity CMS integration for Kyndall Content Engine
 
 import { createClient } from '@sanity/client'
 
@@ -9,59 +9,151 @@ export function initSanity(projectId, dataset, token) {
   client = createClient({
     projectId,
     dataset,
-    token,
     apiVersion: '2024-01-01',
-    useCdn: false
+    token,
+    useCdn: false,
   })
+  console.log('✅ Sanity client initialized')
 }
 
-// Upload an image from URL to Sanity assets
+// Generate a random key for array items
+function generateKey() {
+  return Math.random().toString(36).substring(2, 10)
+}
+
+// Generate URL-friendly slug from title
+function generateSlug(title) {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '')
+    .substring(0, 96)
+}
+
+// Upload image from URL to Sanity
 async function uploadImageFromUrl(imageUrl, filename) {
   if (!client || !imageUrl) return null
   
   try {
-    console.log('   Fetching thumbnail from:', imageUrl.substring(0, 60) + '...')
+    console.log('   Downloading image from:', imageUrl.substring(0, 50) + '...')
     
-    // Fetch the image
     const response = await fetch(imageUrl)
     if (!response.ok) {
-      console.log('   Failed to fetch thumbnail:', response.status)
+      console.log('   ✗ Failed to download image:', response.status)
       return null
     }
     
-    // Get as array buffer and convert to Node.js Buffer
-    const arrayBuffer = await response.arrayBuffer()
-    const buffer = Buffer.from(arrayBuffer)
+    const buffer = await response.arrayBuffer()
+    const uint8Array = new Uint8Array(buffer)
     
-    console.log('   Thumbnail fetched, size:', buffer.length, 'bytes')
+    console.log('   Uploading to Sanity...', uint8Array.length, 'bytes')
     
-    // Upload to Sanity using Buffer (works in Node.js)
-    const asset = await client.assets.upload('image', buffer, {
+    const asset = await client.assets.upload('image', uint8Array, {
       filename: filename || 'thumbnail.jpg',
-      contentType: response.headers.get('content-type') || 'image/jpeg'
+      contentType: 'image/jpeg',
     })
     
-    console.log('   ✓ Thumbnail uploaded to Sanity, asset ID:', asset._id)
+    console.log('   ✓ Image uploaded:', asset._id)
     
     return {
       _type: 'image',
       asset: {
         _type: 'reference',
-        _ref: asset._id
-      }
+        _ref: asset._id,
+      },
     }
   } catch (error) {
-    console.log('   ✗ Could not upload thumbnail:', error.message)
+    console.log('   ✗ Image upload error:', error.message)
     return null
   }
+}
+
+// Convert HTML to Portable Text (Rich Text) for Sanity
+function convertHtmlToPortableText(html) {
+  if (!html) return []
+  
+  const blocks = []
+  
+  // Simple HTML to Portable Text conversion
+  // Split by block-level elements
+  const blockPattern = /<(h[1-6]|p|blockquote|ul|ol)([^>]*)>([\s\S]*?)<\/\1>/gi
+  let match
+  let lastIndex = 0
+  
+  while ((match = blockPattern.exec(html)) !== null) {
+    const tag = match[1].toLowerCase()
+    const content = match[3]
+      .replace(/<[^>]+>/g, '') // Strip inner HTML tags
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .trim()
+    
+    if (!content) continue
+    
+    let style = 'normal'
+    if (tag === 'h1') style = 'h1'
+    else if (tag === 'h2') style = 'h2'
+    else if (tag === 'h3') style = 'h3'
+    else if (tag === 'h4') style = 'h4'
+    else if (tag === 'blockquote') style = 'blockquote'
+    
+    blocks.push({
+      _type: 'block',
+      _key: generateKey(),
+      style,
+      markDefs: [],
+      children: [
+        {
+          _type: 'span',
+          _key: generateKey(),
+          text: content,
+          marks: [],
+        },
+      ],
+    })
+  }
+  
+  // If no blocks found, create a simple paragraph
+  if (blocks.length === 0 && html.trim()) {
+    const plainText = html
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    
+    if (plainText) {
+      blocks.push({
+        _type: 'block',
+        _key: generateKey(),
+        style: 'normal',
+        markDefs: [],
+        children: [
+          {
+            _type: 'span',
+            _key: generateKey(),
+            text: plainText,
+            marks: [],
+          },
+        ],
+      })
+    }
+  }
+  
+  return blocks
 }
 
 export async function checkIfVideoProcessed(videoId) {
   if (!client) throw new Error('Sanity client not initialized')
   
-  const query = `*[_type == "blogPost" && videoId == $videoId][0]`
-  const result = await client.fetch(query, { videoId })
-  return !!result
+  // Check for both regular and prefixed IDs (for TikTok)
+  const query = `count(*[_type == "blogPost" && (videoId == $videoId || videoId == $prefixedId)]) > 0`
+  const result = await client.fetch(query, { 
+    videoId,
+    prefixedId: `tiktok_${videoId}`
+  })
+  return result
 }
 
 export async function createDraftBlogPost({
@@ -92,12 +184,10 @@ export async function createDraftBlogPost({
   let htmlContent = analysis.blogContent || ''
   
   // Replace product reference links with actual URLs
-  // Format: <a href="#product-N" class="product-link">Product Name</a>
   for (let i = 0; i < productLinks.length; i++) {
     const product = productLinks[i]
     const productIndex = i + 1
     
-    // Find all references to this product
     const pattern = new RegExp(`<a href="#product-${productIndex}"[^>]*class="product-link"[^>]*>([^<]+)</a>`, 'gi')
     
     let actualUrl = ''
@@ -114,19 +204,17 @@ export async function createDraftBlogPost({
     if (actualUrl) {
       htmlContent = htmlContent.replace(pattern, `<a href="${actualUrl}" target="_blank" rel="noopener noreferrer" title="${linkTitle}" class="product-link">$1</a>`)
     } else {
-      // No link available - just make it bold
       htmlContent = htmlContent.replace(pattern, '<strong class="product-name">$1</strong>')
     }
   }
   
-  // Also handle any remaining product links that weren't matched (fallback)
+  // Handle remaining unmatched product links
   htmlContent = htmlContent.replace(/<a href="#product-\d+"[^>]*class="product-link"[^>]*>([^<]+)<\/a>/gi, '<strong class="product-name">$1</strong>')
   
-  // Convert HTML to Portable Text (Rich Text) for Sanity
+  // Convert HTML to Portable Text
   const portableTextContent = convertHtmlToPortableText(htmlContent)
   console.log('   ✓ Converted HTML to Rich Text:', portableTextContent.length, 'blocks')
   
-  // Create the blog post document
   // Determine aspect ratio based on platform
   let aspectRatio = 'landscape' // default for YouTube
   const platformLower = (video.platform || 'youtube').toLowerCase()
@@ -158,17 +246,11 @@ export async function createDraftBlogPost({
     aspectRatio: aspectRatio,
     videoUrl: video.url,
     videoId: video.id,
-    // Also store YouTube thumbnail URL as backup
     thumbnailUrl: video.thumbnail || null,
-    // Use Rich Text format - converted from HTML
     contentFormat: 'richtext',
-    // Portable Text content (editable in Sanity's rich text editor)
     content: portableTextContent,
-    // Keep HTML synced with content
     htmlContent: htmlContent,
-    // Store original HTML for "Revert to Original" feature
     originalHtmlContent: htmlContent,
-    // Store product info for reference
     productLinks: productLinks.map(p => ({
       _type: 'productItem',
       _key: generateKey(),
@@ -184,9 +266,10 @@ export async function createDraftBlogPost({
       reviewed: false,
     })),
     suggestedTags: analysis.suggestedTags || [],
-    status: 'draft', // Always create as draft for Kyndall to review
+    // Use visibility toggles instead of status field
+    showInBlog: false,   // Hidden until Kyndall reviews and enables
+    showInVideos: false, // Hidden until Kyndall reviews and enables
     publishedAt: new Date().toISOString(),
-    // Store original publish date from API for video sorting
     originalPublishedAt: video.publishedAt || null,
     autoGenerated: true,
     sourceVideo: {
@@ -202,7 +285,21 @@ export async function createDraftBlogPost({
     doc.thumbnail = thumbnailImage
     console.log('   ✓ Thumbnail added to document')
   } else {
-    console.log('   ⚠ No thumbnail image, using thumbnailUrl only:', doc.thumbnailUrl ? 'yes' : 'no')
+    console.log('   ⚠ No thumbnail image, using thumbnailUrl only:', doc.thumbnailUrl ? 'available' : 'none')
+  }
+  
+  // If we have a thumbnailUrl but no uploaded image, that's okay
+  // The frontend can fall back to thumbnailUrl
+  
+  // Create product summary for logging
+  const shopmyCount = productLinks.filter(p => p.shopmyUrl).length
+  const amazonCount = productLinks.filter(p => p.amazonUrl).length
+  if (productLinks.length > 0) {
+    console.log(`   📦 Products: ${productLinks.length} total (${shopmyCount} ShopMy, ${amazonCount} Amazon)`)
+    productLinks.forEach(p => {
+      const status = p.shopmyUrl ? '✓ ShopMy' : (p.amazonUrl ? '✓ Amazon' : '⚠ No link')
+      console.log(`      - ${p.brand || 'Unknown'} ${p.name || 'Product'}: ${status}`)
+    })
   }
   
   console.log('   Creating blog post in Sanity...')
@@ -214,7 +311,8 @@ export async function createDraftBlogPost({
 export async function getRecentDrafts(limit = 10) {
   if (!client) throw new Error('Sanity client not initialized')
   
-  const query = `*[_type == "blogPost" && status == "draft" && autoGenerated == true] | order(publishedAt desc)[0...$limit] {
+  // Query for auto-generated posts that are hidden (not yet reviewed)
+  const query = `*[_type == "blogPost" && showInBlog == false && autoGenerated == true] | order(publishedAt desc)[0...$limit] {
     _id,
     title,
     category,
@@ -234,6 +332,8 @@ export async function getAdminSettings() {
     youtubeApiKey,
     autoProcessVideos,
     maxVideosPerRun,
+    checkIntervalMinutes,
+    notificationEmail,
     processedVideoIds
   }`
   
@@ -243,7 +343,6 @@ export async function getAdminSettings() {
 export async function updateAdminStats(stats) {
   if (!client) throw new Error('Sanity client not initialized')
   
-  // Get or create admin settings document
   const existing = await client.fetch(`*[_type == "adminSettings"][0]._id`)
   
   if (existing) {
@@ -288,182 +387,19 @@ export async function runCleanup() {
   const thirtyDaysAgo = new Date()
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
   
-  const expiredCodes = await client.fetch(
-    `*[_type == "discountCode" && expiresAt < $date]._id`,
-    { date: thirtyDaysAgo.toISOString() }
-  )
-  
-  if (expiredCodes.length > 0) {
-    console.log(`   Cleaning up ${expiredCodes.length} expired codes`)
-    for (const id of expiredCodes) {
-      await client.delete(id)
-    }
-  }
-  
-  return { deletedCodes: expiredCodes.length }
-}
-
-function generateSlug(title) {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .substring(0, 96)
-}
-
-function generateKey() {
-  return Math.random().toString(36).substring(2, 10)
-}
-
-// Convert HTML to Sanity Portable Text (Rich Text)
-function convertHtmlToPortableText(html) {
-  if (!html) return []
-  
-  const blocks = []
-  
-  // Split by block-level elements
-  // Match: <h2>...</h2>, <h3>...</h3>, <h4>...</h4>, <p>...</p>, <blockquote>...</blockquote>
-  const blockPattern = /<(h2|h3|h4|p|blockquote)[^>]*>([\s\S]*?)<\/\1>/gi
-  
-  let match
-  while ((match = blockPattern.exec(html)) !== null) {
-    const tagName = match[1].toLowerCase()
-    const innerHtml = match[2]
+  try {
+    const expiredCodes = await client.fetch(
+      `*[_type == "discountCode" && expiresAt < $date]._id`,
+      { date: thirtyDaysAgo.toISOString() }
+    )
     
-    // Determine block style
-    let style = 'normal'
-    if (tagName === 'h2') style = 'h2'
-    else if (tagName === 'h3') style = 'h3'
-    else if (tagName === 'h4') style = 'h4'
-    else if (tagName === 'blockquote') style = 'blockquote'
-    
-    // Parse inline content (text, bold, italic, links)
-    const { children, markDefs } = parseInlineContent(innerHtml)
-    
-    if (children.length > 0) {
-      blocks.push({
-        _type: 'block',
-        _key: generateKey(),
-        style: style,
-        markDefs: markDefs,
-        children: children
-      })
-    }
-  }
-  
-  // If no blocks found, treat entire content as one paragraph
-  if (blocks.length === 0 && html.trim()) {
-    const { children, markDefs } = parseInlineContent(html)
-    if (children.length > 0) {
-      blocks.push({
-        _type: 'block',
-        _key: generateKey(),
-        style: 'normal',
-        markDefs: markDefs,
-        children: children
-      })
-    }
-  }
-  
-  return blocks
-}
-
-// Parse inline HTML content (bold, italic, links) into Portable Text spans
-function parseInlineContent(html) {
-  const children = []
-  const markDefs = []
-  
-  // Clean up the HTML
-  let content = html
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  
-  if (!content) {
-    return { children: [], markDefs: [] }
-  }
-  
-  // Regex to find inline elements
-  // Matches: <strong>, <b>, <em>, <i>, <a href="...">, and plain text between them
-  const inlinePattern = /<(strong|b|em|i|a)([^>]*)>([\s\S]*?)<\/\1>|([^<]+)/gi
-  
-  let inlineMatch
-  while ((inlineMatch = inlinePattern.exec(content)) !== null) {
-    if (inlineMatch[4]) {
-      // Plain text
-      const text = decodeHtmlEntities(inlineMatch[4].trim())
-      if (text) {
-        children.push({
-          _type: 'span',
-          _key: generateKey(),
-          text: text,
-          marks: []
-        })
+    if (expiredCodes.length > 0) {
+      console.log(`   🧹 Cleaning up ${expiredCodes.length} expired discount codes...`)
+      for (const id of expiredCodes) {
+        await client.delete(id)
       }
-    } else {
-      // Inline element
-      const tag = inlineMatch[1].toLowerCase()
-      const attrs = inlineMatch[2] || ''
-      const innerText = inlineMatch[3]
-      
-      // Get the text content (strip any nested tags for simplicity)
-      const plainText = decodeHtmlEntities(innerText.replace(/<[^>]*>/g, '').trim())
-      
-      if (!plainText) continue
-      
-      const marks = []
-      
-      if (tag === 'strong' || tag === 'b') {
-        marks.push('strong')
-      } else if (tag === 'em' || tag === 'i') {
-        marks.push('em')
-      } else if (tag === 'a') {
-        // Extract href from attributes
-        const hrefMatch = attrs.match(/href=["']([^"']+)["']/i)
-        if (hrefMatch) {
-          const linkKey = generateKey()
-          markDefs.push({
-            _type: 'link',
-            _key: linkKey,
-            href: hrefMatch[1]
-          })
-          marks.push(linkKey)
-        }
-      }
-      
-      children.push({
-        _type: 'span',
-        _key: generateKey(),
-        text: plainText,
-        marks: marks
-      })
     }
+  } catch (error) {
+    console.log('   Cleanup error:', error.message)
   }
-  
-  // If nothing was parsed, just add the plain text
-  if (children.length === 0 && content) {
-    const plainText = decodeHtmlEntities(content.replace(/<[^>]*>/g, '').trim())
-    if (plainText) {
-      children.push({
-        _type: 'span',
-        _key: generateKey(),
-        text: plainText,
-        marks: []
-      })
-    }
-  }
-  
-  return { children, markDefs }
-}
-
-// Decode common HTML entities
-function decodeHtmlEntities(text) {
-  return text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
 }
