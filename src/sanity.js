@@ -1,7 +1,9 @@
-// src/sanity.js
-// Sanity CMS integration for Kyndall Content Engine
+// kyndall-content-engine/src/sanity.js
+// Sanity client for creating blog posts
+// NOW WITH GEO CONTENT FIELDS
 
 import { createClient } from '@sanity/client'
+import fetch from 'node-fetch'
 
 let client = null
 
@@ -9,19 +11,18 @@ export function initSanity(projectId, dataset, token) {
   client = createClient({
     projectId,
     dataset,
-    apiVersion: '2024-01-01',
     token,
+    apiVersion: '2024-01-01',
     useCdn: false,
   })
-  console.log('✅ Sanity client initialized')
 }
 
-// Generate a random key for array items
+// Generate a unique key for array items
 function generateKey() {
   return Math.random().toString(36).substring(2, 10)
 }
 
-// Generate URL-friendly slug from title
+// Generate slug from title
 function generateSlug(title) {
   return title
     .toLowerCase()
@@ -32,123 +33,120 @@ function generateSlug(title) {
 
 // Upload image from URL to Sanity
 async function uploadImageFromUrl(imageUrl, filename) {
-  if (!client || !imageUrl) return null
+  if (!imageUrl) return null
   
   try {
-    console.log('   Downloading image from:', imageUrl.substring(0, 50) + '...')
+    console.log(`   Downloading image: ${imageUrl.substring(0, 50)}...`)
     
     const response = await fetch(imageUrl)
     if (!response.ok) {
-      console.log('   ✗ Failed to download image:', response.status)
+      console.log(`   ✗ Image download failed: ${response.status}`)
       return null
     }
     
-    const buffer = await response.arrayBuffer()
-    const uint8Array = new Uint8Array(buffer)
+    const buffer = await response.buffer()
     
-    console.log('   Uploading to Sanity...', uint8Array.length, 'bytes')
-    
-    const asset = await client.assets.upload('image', uint8Array, {
-      filename: filename || 'thumbnail.jpg',
-      contentType: 'image/jpeg',
+    console.log(`   Uploading to Sanity (${buffer.length} bytes)...`)
+    const asset = await client.assets.upload('image', buffer, {
+      filename: filename || 'thumbnail.jpg'
     })
     
-    console.log('   ✓ Image uploaded:', asset._id)
+    console.log(`   ✓ Image uploaded: ${asset._id}`)
     
     return {
       _type: 'image',
       asset: {
         _type: 'reference',
-        _ref: asset._id,
-      },
+        _ref: asset._id
+      }
     }
   } catch (error) {
-    console.log('   ✗ Image upload error:', error.message)
+    console.log(`   ✗ Image upload error: ${error.message}`)
     return null
   }
 }
 
-// Convert HTML to Portable Text (Rich Text) for Sanity
+// Convert HTML to Portable Text (simplified)
 function convertHtmlToPortableText(html) {
   if (!html) return []
   
   const blocks = []
   
-  // Simple HTML to Portable Text conversion
-  // Split by block-level elements
-  const blockPattern = /<(h[1-6]|p|blockquote|ul|ol)([^>]*)>([\s\S]*?)<\/\1>/gi
-  let match
-  let lastIndex = 0
+  // Split by paragraphs and headers
+  const parts = html.split(/<\/?(?:p|h[1-6]|div)>/gi).filter(p => p.trim())
   
-  while ((match = blockPattern.exec(html)) !== null) {
-    const tag = match[1].toLowerCase()
-    const content = match[3]
-      .replace(/<[^>]+>/g, '') // Strip inner HTML tags
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .trim()
+  for (const part of parts) {
+    const trimmed = part.trim()
+    if (!trimmed) continue
     
-    if (!content) continue
+    // Check for header
+    const headerMatch = html.match(new RegExp(`<(h[2-4])[^>]*>${escapeRegex(trimmed)}<\\/\\1>`, 'i'))
     
     let style = 'normal'
-    if (tag === 'h1') style = 'h1'
-    else if (tag === 'h2') style = 'h2'
-    else if (tag === 'h3') style = 'h3'
-    else if (tag === 'h4') style = 'h4'
-    else if (tag === 'blockquote') style = 'blockquote'
+    if (headerMatch) {
+      const tag = headerMatch[1].toLowerCase()
+      if (tag === 'h2') style = 'h2'
+      else if (tag === 'h3') style = 'h3'
+      else if (tag === 'h4') style = 'h4'
+    }
+    
+    // Convert inline formatting
+    const children = parseInlineFormatting(trimmed)
     
     blocks.push({
       _type: 'block',
       _key: generateKey(),
       style,
-      markDefs: [],
-      children: [
-        {
-          _type: 'span',
-          _key: generateKey(),
-          text: content,
-          marks: [],
-        },
-      ],
+      markDefs: children.markDefs || [],
+      children: children.spans
     })
   }
   
-  // If no blocks found, create a simple paragraph
-  if (blocks.length === 0 && html.trim()) {
-    const plainText = html
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-    
-    if (plainText) {
-      blocks.push({
-        _type: 'block',
-        _key: generateKey(),
-        style: 'normal',
-        markDefs: [],
-        children: [
-          {
-            _type: 'span',
-            _key: generateKey(),
-            text: plainText,
-            marks: [],
-          },
-        ],
-      })
-    }
-  }
-  
-  return blocks
+  return blocks.length > 0 ? blocks : [{
+    _type: 'block',
+    _key: generateKey(),
+    style: 'normal',
+    markDefs: [],
+    children: [{ _type: 'span', _key: generateKey(), text: html, marks: [] }]
+  }]
 }
 
+// Parse inline formatting (bold, italic, links)
+function parseInlineFormatting(text) {
+  const spans = []
+  const markDefs = []
+  
+  // Remove HTML tags but track formatting
+  let current = text
+  
+  // Strip tags and get plain text
+  const plainText = current
+    .replace(/<strong[^>]*>(.*?)<\/strong>/gi, '$1')
+    .replace(/<em[^>]*>(.*?)<\/em>/gi, '$1')
+    .replace(/<a[^>]*>(.*?)<\/a>/gi, '$1')
+    .replace(/<[^>]+>/g, '')
+  
+  spans.push({
+    _type: 'span',
+    _key: generateKey(),
+    text: plainText,
+    marks: []
+  })
+  
+  return { spans, markDefs }
+}
+
+// Escape regex special characters
+function escapeRegex(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Check if a video has already been processed
 export async function checkIfVideoProcessed(videoId) {
   if (!client) throw new Error('Sanity client not initialized')
   
-  // Check for both regular and prefixed IDs (for TikTok)
-  const query = `count(*[_type == "blogPost" && (videoId == $videoId || videoId == $prefixedId)]) > 0`
+  // Check both the videoId field and with tiktok_ prefix
+  const query = `*[_type == "blogPost" && (videoId == $videoId || videoId == $prefixedId)][0]._id`
   const result = await client.fetch(query, { 
     videoId,
     prefixedId: `tiktok_${videoId}`
@@ -231,6 +229,7 @@ export async function createDraftBlogPost({
   }
   const platform = platformMap[platformLower] || 'YouTube'
   
+  // Build the document with GEO fields
   const doc = {
     _type: 'blogPost',
     title: analysis.blogTitle,
@@ -251,6 +250,77 @@ export async function createDraftBlogPost({
     content: portableTextContent,
     htmlContent: htmlContent,
     originalHtmlContent: htmlContent,
+    
+    // ==================== GEO CONTENT (NEW) ====================
+    quickAnswer: analysis.quickAnswer || null,
+    quickAnswerScore: null, // Will be set by review if done
+    quickAnswerSuggestion: null,
+    
+    // Key Takeaways
+    keyTakeaways: (analysis.keyTakeaways || []).map(takeaway => ({
+      _type: 'takeaway',
+      _key: generateKey(),
+      point: takeaway.point || takeaway,
+      icon: takeaway.icon || '✨'
+    })),
+    
+    // Expert Tips
+    expertTips: (analysis.expertTips || []).map(tip => ({
+      _type: 'tip',
+      _key: generateKey(),
+      title: tip.title,
+      description: tip.description,
+      proTip: tip.proTip || null
+    })),
+    
+    // FAQ Section
+    faqSection: (analysis.faqSection || []).map(faq => ({
+      _type: 'faqItem',
+      _key: generateKey(),
+      question: faq.question,
+      answer: faq.answer
+    })),
+    
+    // Kyndall's Take
+    kyndallsTake: analysis.kyndallsTake ? {
+      showKyndallsTake: true,
+      headline: analysis.kyndallsTake.headline || "Kyndall's Take",
+      content: analysis.kyndallsTake.content,
+      mood: analysis.kyndallsTake.mood || 'recommend'
+    } : {
+      showKyndallsTake: false,
+      headline: "Kyndall's Take",
+      content: null,
+      mood: 'recommend'
+    },
+    
+    // Author (use default)
+    useDefaultAuthor: true,
+    author: null,
+    
+    // Banner (use category default)
+    useCustomBanner: false,
+    customBannerImage: null,
+    
+    // Related posts (empty - will be auto-filled on frontend)
+    relatedPosts: [],
+    relatedArticles: [],
+    
+    // ==================== PRODUCTS ====================
+    featuredProducts: productLinks.map(p => ({
+      _type: 'product',
+      _key: generateKey(),
+      productName: p.name || 'Product',
+      brand: p.brand || null,
+      shopmyUrl: p.shopmyUrl || null,
+      amazonUrl: p.amazonUrl || null,
+      productNote: null,
+      hasShopMyLink: p.shopmyUrl ? 'yes' : 'pending',
+      hasAmazonLink: p.amazonUrl ? 'yes' : 'pending',
+      reviewed: false
+    })),
+    
+    // Legacy product links format (for backwards compatibility)
     productLinks: productLinks.map(p => ({
       _type: 'productItem',
       _key: generateKey(),
@@ -265,13 +335,21 @@ export async function createDraftBlogPost({
       suggestedAmazonSearch: p.amazonUrl ? null : `https://www.amazon.com/s?k=${encodeURIComponent((p.brand || '') + ' ' + (p.name || ''))}`,
       reviewed: false,
     })),
+    
     suggestedTags: analysis.suggestedTags || [],
-    // Use visibility toggles instead of status field
-    showInBlog: false,   // Hidden until Kyndall reviews and enables
-    showInVideos: false, // Hidden until Kyndall reviews and enables
+    
+    // Visibility toggles - hidden until Kyndall reviews and enables
+    showInBlog: false,
+    showInVideos: false,
+    
+    // Timestamps
     publishedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     originalPublishedAt: video.publishedAt || null,
+    
+    // Source info
     autoGenerated: true,
+    sourceVideoId: video.id,
     sourceVideo: {
       id: video.id,
       title: video.title,
@@ -285,22 +363,25 @@ export async function createDraftBlogPost({
     doc.thumbnail = thumbnailImage
     console.log('   ✓ Thumbnail added to document')
   } else {
-    console.log('   ⚠ No thumbnail image, using thumbnailUrl only:', doc.thumbnailUrl ? 'available' : 'none')
+    console.log('   ⚠ No thumbnail image, using thumbnailUrl only:', doc.thumbnailUrl ? 'set' : 'not set')
   }
   
-  // If we have a thumbnailUrl but no uploaded image, that's okay
-  // The frontend can fall back to thumbnailUrl
-  
-  // Create product summary for logging
-  const shopmyCount = productLinks.filter(p => p.shopmyUrl).length
-  const amazonCount = productLinks.filter(p => p.amazonUrl).length
+  // Log product link summary
   if (productLinks.length > 0) {
-    console.log(`   📦 Products: ${productLinks.length} total (${shopmyCount} ShopMy, ${amazonCount} Amazon)`)
+    console.log('   📦 Product links:')
     productLinks.forEach(p => {
       const status = p.shopmyUrl ? '✓ ShopMy' : (p.amazonUrl ? '✓ Amazon' : '⚠ No link')
       console.log(`      - ${p.brand || 'Unknown'} ${p.name || 'Product'}: ${status}`)
     })
   }
+  
+  // Log GEO content summary
+  console.log('   🎯 GEO Content:')
+  console.log(`      - Quick Answer: ${doc.quickAnswer ? 'Yes' : 'No'}`)
+  console.log(`      - Key Takeaways: ${doc.keyTakeaways.length}`)
+  console.log(`      - Expert Tips: ${doc.expertTips.length}`)
+  console.log(`      - FAQs: ${doc.faqSection.length}`)
+  console.log(`      - Kyndall's Take: ${doc.kyndallsTake.showKyndallsTake ? 'Yes' : 'No'}`)
   
   console.log('   Creating blog post in Sanity...')
   const result = await client.create(doc)
@@ -318,7 +399,10 @@ export async function getRecentDrafts(limit = 10) {
     category,
     platform,
     publishedAt,
-    productLinks
+    productLinks,
+    quickAnswer,
+    keyTakeaways,
+    faqSection
   }`
   
   return client.fetch(query, { limit })
@@ -402,4 +486,30 @@ export async function runCleanup() {
   } catch (error) {
     console.log('   Cleanup error:', error.message)
   }
+}
+
+export async function getRecentArticles(limit = 20) {
+  if (!client) throw new Error('Sanity client not initialized')
+  
+  const query = `*[_type == "article" && showOnSite == true] | order(publishedAt desc)[0...$limit] {
+    _id,
+    title,
+    "slug": slug.current,
+    category
+  }`
+  
+  return client.fetch(query, { limit })
+}
+
+export default {
+  initSanity,
+  checkIfVideoProcessed,
+  createDraftBlogPost,
+  getRecentDrafts,
+  getAdminSettings,
+  updateAdminStats,
+  getExpiringCodes,
+  markReminderSent,
+  runCleanup,
+  getRecentArticles
 }
