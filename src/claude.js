@@ -1,5 +1,7 @@
+// kyndall-content-engine/src/claude.js
 // Claude AI Content Analysis Service
 // Extracts products from YouTube descriptions and generates blog content
+// NOW WITH GEO CONTENT GENERATION (quickAnswer, keyTakeaways, expertTips, faqSection, kyndallsTake)
 
 import Anthropic from '@anthropic-ai/sdk'
 
@@ -31,7 +33,7 @@ export async function analyzeVideoContent(video) {
     })
   }
 
-  const prompt = `You are analyzing a YouTube video to create a blog post.
+  const prompt = `You are analyzing a YouTube video to create a GEO-optimized blog post for Kyndall Ames, a beauty/lifestyle content creator.
 
 VIDEO TITLE: ${video.title}
 
@@ -47,6 +49,7 @@ YOUR TASK:
 1. Generate a blog post about this video
 2. Suggest SEO metadata
 3. Determine the category
+4. Generate GEO (Generative Engine Optimization) content sections
 
 NOTE: Products have already been extracted from the description. Do NOT add or modify products.
 
@@ -58,6 +61,13 @@ CRITICAL FORMATTING RULES:
 - Example RIGHT: "Check out [PRODUCT_LINK:Serum] for glowing skin"
 - This applies to ALL inline formatting - never let formatted text touch unformatted text
 
+VOICE & TONE:
+- Write like Kyndall - a beauty influencer talking to a friend
+- Use "you" and "your" freely - make it personal
+- Casual phrases are okay: "here's the deal", "spoiler alert", "game-changer", "not gonna lie"
+- Short paragraphs (2-4 sentences max)
+- Be specific and actionable but SOUND like a person, not a textbook
+
 Respond with ONLY valid JSON (no markdown, no backticks):
 {
   "category": "makeup|skincare|fashion|lifestyle|travel",
@@ -66,13 +76,49 @@ Respond with ONLY valid JSON (no markdown, no backticks):
   "blogContent": "Full blog post (200-400 words) with [PRODUCT_LINK:Product Name] placeholders where products should be linked. REMEMBER: spaces around ALL formatting!",
   "seoTitle": "SEO optimized title (50-60 chars)",
   "seoDescription": "Meta description for search engines (150-160 chars)",
-  "suggestedTags": ["tag1", "tag2", "tag3"]
+  "suggestedTags": ["tag1", "tag2", "tag3", "tag4", "tag5"],
+  
+  "quickAnswer": "2-3 sentence TL;DR that directly answers the main question. Be specific with product names and techniques. 150-300 characters ideal. This appears in a highlighted box at the top of the post for AI engines to extract.",
+  
+  "keyTakeaways": [
+    { "icon": "✨", "point": "First key takeaway - be specific and actionable" },
+    { "icon": "💧", "point": "Second key takeaway" },
+    { "icon": "☀️", "point": "Third key takeaway" },
+    { "icon": "⏰", "point": "Fourth key takeaway (optional)" }
+  ],
+  
+  "expertTips": [
+    {
+      "title": "Tip Title (short, catchy)",
+      "description": "2-3 sentences explaining the tip",
+      "proTip": "Optional one-liner insider advice"
+    },
+    {
+      "title": "Second Tip Title",
+      "description": "Explanation of second tip",
+      "proTip": null
+    }
+  ],
+  
+  "faqSection": [
+    { "question": "Common question viewers might ask?", "answer": "Helpful, conversational answer in 2-3 sentences." },
+    { "question": "Another relevant question?", "answer": "Another helpful answer." },
+    { "question": "Third question?", "answer": "Third answer." },
+    { "question": "Fourth question?", "answer": "Fourth answer." },
+    { "question": "Fifth question?", "answer": "Fifth answer." }
+  ],
+  
+  "kyndallsTake": {
+    "headline": "Kyndall's Take",
+    "content": "Personal, authentic 2-4 sentence perspective. Use first person. Be real about what you love or have mixed feelings about. This is where personality shines through.",
+    "mood": "love|recommend|mixed|caution|skip"
+  }
 }`
 
   try {
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
+      max_tokens: 4000,
       messages: [{ role: 'user', content: prompt }]
     })
 
@@ -101,6 +147,7 @@ Respond with ONLY valid JSON (no markdown, no backticks):
     analysis.products = descriptionProducts
 
     console.log(`   ✓ Analysis complete, ${analysis.products.length} products`)
+    console.log(`   ✓ GEO content: quickAnswer, ${analysis.keyTakeaways?.length || 0} takeaways, ${analysis.expertTips?.length || 0} tips, ${analysis.faqSection?.length || 0} FAQs`)
     
     return analysis
 
@@ -116,9 +163,98 @@ Respond with ONLY valid JSON (no markdown, no backticks):
       blogContent: `Check out this video: ${video.title}`,
       seoTitle: video.title.substring(0, 60),
       seoDescription: video.title.substring(0, 160),
-      suggestedTags: []
+      suggestedTags: [],
+      // Default GEO content
+      quickAnswer: null,
+      keyTakeaways: [],
+      expertTips: [],
+      faqSection: [],
+      kyndallsTake: null
     }
   }
+}
+
+/**
+ * Review a quick answer for SEO/GEO effectiveness
+ * Returns score, feedback, and suggestion
+ */
+export async function reviewQuickAnswer(quickAnswer, postTitle, category, excerpt) {
+  if (!client) throw new Error('Claude client not initialized')
+
+  const prompt = `You are an SEO and GEO (Generative Engine Optimization) expert reviewing a "Quick Answer" box for a beauty/lifestyle blog post.
+
+The Quick Answer box appears at the top of blog posts and is critical for:
+1. Featured snippets in Google
+2. AI engine extraction (ChatGPT, Perplexity, Claude)
+3. Giving readers immediate value
+
+**POST DETAILS:**
+- Title: "${postTitle}"
+- Category: ${category}
+- Excerpt: ${excerpt || 'Not provided'}
+
+**QUICK ANSWER TO REVIEW:**
+"${quickAnswer}"
+
+**EVALUATION CRITERIA:**
+1. **Directness (0-2 points)**: Does it answer the implied question immediately?
+2. **Specificity (0-2 points)**: Does it include specific products, techniques, or timeframes?
+3. **Length (0-2 points)**: Is it 150-300 characters? (ideal for snippets)
+4. **Voice (0-2 points)**: Does it sound like a beauty influencer, not a textbook?
+5. **Actionability (0-2 points)**: Can readers take immediate action from this?
+
+**RESPOND IN THIS EXACT JSON FORMAT:**
+{
+  "score": <number 1-10>,
+  "feedback": "<1-2 sentence overall assessment>",
+  "suggestion": "<improved version of the quick answer, if score < 8>",
+  "strengths": ["<strength 1>", "<strength 2>"],
+  "improvements": ["<improvement 1>", "<improvement 2>"]
+}
+
+Be encouraging but honest. The goal is to help, not criticize.`
+
+  try {
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: prompt }]
+    })
+
+    const text = response.content[0].text
+    const jsonMatch = text.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) {
+      throw new Error('Could not parse JSON from response')
+    }
+
+    return JSON.parse(jsonMatch[0])
+  } catch (error) {
+    console.error('   Quick answer review error:', error.message)
+    return {
+      score: 5,
+      feedback: 'Could not complete review',
+      suggestion: null,
+      strengths: [],
+      improvements: []
+    }
+  }
+}
+
+// Fix spacing issues around HTML formatting
+function fixFormattingSpaces(html) {
+  if (!html) return html
+  
+  // Add space before opening tags if preceded by a word character
+  html = html.replace(/(\w)(<(?:strong|em|a|span)[^>]*>)/gi, '$1 $2')
+  
+  // Add space after closing tags if followed by a word character
+  html = html.replace(/(<\/(?:strong|em|a|span)>)(\w)/gi, '$1 $2')
+  
+  // Fix product link placeholders
+  html = html.replace(/(\w)\[PRODUCT_LINK:/gi, '$1 [PRODUCT_LINK:')
+  html = html.replace(/\](\w)/gi, '] $1')
+  
+  return html
 }
 
 // Extract products from YouTube description
@@ -136,255 +272,122 @@ function extractProductsFromDescription(description) {
     'Glossier', 'Milk Makeup', 'Ilia', 'Tower 28', 'Merit', 'Saie',
     'Makeup By Mario', 'Laura Mercier', 'Hourglass', 'Armani', 'YSL', 'Dior', 'Chanel',
     'Estée Lauder', 'Clinique', 'Lancôme', 'Smashbox', 'e.l.f.', 'elf', 'NYX',
-    'Maybelline', 'L\'Oréal', 'Revlon', 'CoverGirl', 'The Ordinary', 'Drunk Elephant',
-    'Tatcha', 'Sunday Riley', 'Supergoop', 'La Mer', 'SK-II', 'Olaplex', 'Dyson',
-    'Moroccan Oil', 'Ouai', 'Sol de Janeiro', 'Gisou', 'Rhode', 'Kiehl\'s',
-    'CeraVe', 'La Roche-Posay', 'Paula\'s Choice', 'Good Molecules', 'Anastasia Beverly Hills',
-    'ABH', 'Huda Beauty', 'Natasha Denona', 'CT', 'PMG'
+    'Maybelline', 'L\'Oreal', 'Revlon', 'CoverGirl', 'Neutrogena',
+    'CeraVe', 'La Roche-Posay', 'The Ordinary', 'Paula\'s Choice', 'Drunk Elephant',
+    'Tatcha', 'SK-II', 'Glow Recipe', 'Youth To The People', 'Supergoop',
+    'Olaplex', 'Dyson', 'Ouai', 'Briogeo', 'Moroccanoil', 'Living Proof',
+    'Peach & Lily', 'Laneige', 'Innisfree', 'COSRX', 'Some By Mi',
+    'Pixi', 'First Aid Beauty', 'Origins', 'Fresh', 'Kiehl\'s',
+    'Sol de Janeiro', 'Brazilian Bum Bum', 'Kopari', 'Nécessaire',
+    'Augustinus Bader', 'La Mer', 'Sunday Riley', 'Dr. Dennis Gross'
   ]
 
-  // METHOD 1: Look for "PRODUCTS:" section (most reliable for Kyndall's format)
-  const productsMatch = description.match(/PRODUCTS?:?\s*([\s\S]*?)(?=\n\n|\nFOLLOW|\nSUBSCRIBE|\nBUSINESS|\nMUSIC|\n[A-Z]{2,}:|$)/i)
-  
-  if (productsMatch) {
-    const productsSection = productsMatch[1]
-    console.log(`      Found PRODUCTS section`)
-    
-    // Match: "Product Name - URL" or "Product Name URL"
-    const productPattern = /([^-\n]+(?:\s+"[^"]+")?\s*)-?\s*(https?:\/\/[^\s]+)/g
-    let match
-    
-    while ((match = productPattern.exec(productsSection)) !== null) {
-      const fullProductName = match[1].trim()
-      const url = match[2].trim()
-      
-      // Parse brand and product name
-      const { brand, name } = extractBrandAndName(fullProductName, beautyBrands)
-      
-      // Determine URL type and process accordingly
-      let shopmyUrl = null
-      let amazonUrl = null
-      
-      if (url.includes('shopmy.us') || url.includes('go.shopmy.us') || url.includes('shop-links.co')) {
-        // ShopMy link - use as-is (already has affiliate tracking)
-        shopmyUrl = url
-      } else if (url.includes('amazon.com') || url.includes('amzn.to') || url.includes('amzn.com')) {
-        // Amazon link - add associate tag for affiliate credit
-        amazonUrl = addAmazonAssociateTag(url)
-      }
-      
-      products.push({
-        brand,
-        name,
-        type: guessProductType(fullProductName),
-        searchQuery: `${brand} ${name}`.trim(),
-        shopmyUrl,
-        amazonUrl,
-        originalUrl: url
-      })
-    }
-  }
+  // ShopMy link patterns
+  const shopmyPatterns = [
+    /(?:https?:\/\/)?(?:www\.)?shopmy\.us\/[^\s]+/gi,
+    /(?:https?:\/\/)?(?:www\.)?shop-links\.co\/[^\s]+/gi,
+    /(?:https?:\/\/)?(?:www\.)?shopstyle\.it\/[^\s]+/gi,
+  ]
 
-  // METHOD 2: If no PRODUCTS section, scan whole description for product links
-  if (products.length === 0) {
-    const lines = description.split('\n')
+  // Amazon link patterns
+  const amazonPatterns = [
+    /(?:https?:\/\/)?(?:www\.)?(?:amazon\.com|amzn\.to|amzn\.com)\/[^\s]+/gi,
+    /(?:https?:\/\/)?(?:www\.)?a\.co\/[^\s]+/gi,
+  ]
+
+  // Split into lines
+  const lines = description.split('\n')
+  
+  for (const line of lines) {
+    const trimmedLine = line.trim()
+    if (!trimmedLine) continue
     
-    for (const line of lines) {
-      const trimmedLine = line.trim()
-      if (!trimmedLine) continue
-      
-      // Skip non-product lines
-      if (trimmedLine.toLowerCase().includes('follow me') ||
-          trimmedLine.toLowerCase().includes('subscribe') ||
-          trimmedLine.toLowerCase().includes('business') ||
-          trimmedLine.toLowerCase().includes('instagram:') ||
-          trimmedLine.toLowerCase().includes('tiktok:') ||
-          trimmedLine.toLowerCase().includes('twitter:')) {
-        continue
+    // Check for ShopMy links
+    let shopmyUrl = null
+    for (const pattern of shopmyPatterns) {
+      const match = trimmedLine.match(pattern)
+      if (match) {
+        shopmyUrl = match[0]
+        break
       }
+    }
+    
+    // Check for Amazon links
+    let amazonUrl = null
+    for (const pattern of amazonPatterns) {
+      const match = trimmedLine.match(pattern)
+      if (match) {
+        amazonUrl = match[0]
+        break
+      }
+    }
+    
+    // If we found a link, try to extract product info
+    if (shopmyUrl || amazonUrl) {
+      // Try to find brand and product name
+      let brand = null
+      let productName = null
       
-      // Look for lines with URLs
-      const urlMatch = trimmedLine.match(/(.+?)\s*[-–:]?\s*(https?:\/\/[^\s]+)/i)
-      
-      if (urlMatch) {
-        const productName = urlMatch[1].replace(/^[•\-\*\d.]\s*/, '').trim()
-        const url = urlMatch[2]
-        
-        // Skip if product name is too short or looks like a section header
-        if (productName.length < 3 || productName.toUpperCase() === productName) continue
-        
-        const { brand, name } = extractBrandAndName(productName, beautyBrands)
-        
-        let shopmyUrl = null
-        let amazonUrl = null
-        
-        if (url.includes('shopmy.us') || url.includes('go.shopmy.us') || url.includes('shop-links.co')) {
-          shopmyUrl = url
-        } else if (url.includes('amazon.com') || url.includes('amzn.to') || url.includes('amzn.com')) {
-          amazonUrl = addAmazonAssociateTag(url)
-        }
-        
-        // Only add if it's an affiliate link we recognize
-        if (shopmyUrl || amazonUrl || url.includes('rstyle') || url.includes('liketoknow') || url.includes('ltk.app')) {
-          products.push({
-            brand,
-            name,
-            type: guessProductType(productName),
-            searchQuery: `${brand} ${name}`.trim(),
-            shopmyUrl,
-            amazonUrl,
-            originalUrl: url
-          })
+      // Check for brand in line
+      for (const b of beautyBrands) {
+        if (trimmedLine.toLowerCase().includes(b.toLowerCase())) {
+          brand = b
+          break
         }
       }
-    }
-  }
-
-  // Remove duplicates based on URL
-  const seen = new Set()
-  return products.filter(p => {
-    const key = p.originalUrl || `${p.brand}-${p.name}`.toLowerCase()
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-// Add Amazon Associate tag to URL for affiliate credit
-function addAmazonAssociateTag(url) {
-  try {
-    // Handle amzn.to short links - can't modify, but they should already have tracking
-    if (url.includes('amzn.to')) {
-      console.log(`        ℹ️  Short Amazon link (amzn.to) - using as-is`)
-      return url
-    }
-    
-    const urlObj = new URL(url)
-    
-    // Check if tag already exists
-    if (urlObj.searchParams.has('tag')) {
-      const existingTag = urlObj.searchParams.get('tag')
-      console.log(`        ℹ️  Amazon link already has tag: ${existingTag}`)
-      return url
-    }
-    
-    // Add the associate tag
-    urlObj.searchParams.set('tag', amazonAssociateTag)
-    
-    console.log(`        ✓ Added Amazon Associate tag: ${amazonAssociateTag}`)
-    return urlObj.toString()
-    
-  } catch (error) {
-    console.log(`        ⚠️  Could not parse Amazon URL, using as-is`)
-    // If URL parsing fails, try simple string append
-    if (url.includes('?')) {
-      return `${url}&tag=${amazonAssociateTag}`
-    } else {
-      return `${url}?tag=${amazonAssociateTag}`
-    }
-  }
-}
-
-function extractBrandAndName(fullProductName, beautyBrands) {
-  let brand = 'Unknown'
-  let name = fullProductName
-  
-  // Sort brands by length (longest first) to match "Benefit Cosmetics" before "Benefit"
-  const sortedBrands = [...beautyBrands].sort((a, b) => b.length - a.length)
-  
-  for (const b of sortedBrands) {
-    const regex = new RegExp(`^${escapeRegex(b)}\\s+`, 'i')
-    if (regex.test(fullProductName)) {
-      brand = b
-      name = fullProductName.replace(regex, '').trim()
-      break
+      
+      // Extract product name (text before the link, or after brand)
+      const textBeforeLink = trimmedLine.split(/https?:\/\//)[0].trim()
+      if (textBeforeLink) {
+        // Remove common prefixes
+        productName = textBeforeLink
+          .replace(/^[-•*]\s*/, '')
+          .replace(/^(?:Use code|Code|Discount).*$/i, '')
+          .trim()
+        
+        // If we found a brand, remove it from product name
+        if (brand && productName.toLowerCase().startsWith(brand.toLowerCase())) {
+          productName = productName.substring(brand.length).trim()
+        }
+      }
+      
+      if (productName || brand) {
+        products.push({
+          brand: brand || 'Unknown',
+          name: productName || 'Product',
+          shopmyUrl: shopmyUrl || null,
+          amazonUrl: amazonUrl || null,
+          originalUrl: shopmyUrl || amazonUrl
+        })
+      }
     }
   }
   
-  // Clean up name - remove quotes around shade names but keep the shade
-  name = name.replace(/"/g, '')
-  
-  return { brand, name }
+  return products
 }
 
-function escapeRegex(string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function guessProductType(text) {
-  const lower = text.toLowerCase()
-  
-  if (lower.includes('foundation') || lower.includes('concealer') || lower.includes('powder') ||
-      lower.includes('blush') || lower.includes('bronzer') || lower.includes('highlighter') ||
-      lower.includes('lipstick') || lower.includes('lip ') || lower.includes('mascara') ||
-      lower.includes('eyeliner') || lower.includes('eyeshadow') || lower.includes('brow') ||
-      lower.includes('primer') || lower.includes('setting') || lower.includes('contour') ||
-      lower.includes('tint') || lower.includes('pencil') || lower.includes('balm')) {
-    return 'makeup'
-  }
-  
-  if (lower.includes('serum') || lower.includes('moisturizer') || lower.includes('cleanser') ||
-      lower.includes('toner') || lower.includes('sunscreen') || lower.includes('spf') ||
-      lower.includes('retinol') || lower.includes('vitamin c') || lower.includes('mask') ||
-      lower.includes('exfoliant') || lower.includes('cream') || lower.includes('lotion')) {
-    return 'skincare'
-  }
-  
-  if (lower.includes('shampoo') || lower.includes('conditioner') || lower.includes('hair') ||
-      lower.includes('oil') || lower.includes('styling') || lower.includes('olaplex')) {
-    return 'haircare'
-  }
-  
-  if (lower.includes('perfume') || lower.includes('fragrance') || lower.includes('cologne') ||
-      lower.includes('body mist') || lower.includes('eau de')) {
-    return 'fragrance'
-  }
-  
-  if (lower.includes('brush') || lower.includes('sponge') || lower.includes('curler') ||
-      lower.includes('dryer') || lower.includes('straightener') || lower.includes('dyson') ||
-      lower.includes('mirror') || lower.includes('organizer')) {
-    return 'tools'
-  }
-  
-  return 'makeup' // Default to makeup for beauty content
-}
-
+// Guess category from text
 function guessCategory(text) {
   const lower = text.toLowerCase()
   
-  if (lower.includes('skincare') || lower.includes('skin care') || lower.includes('routine')) {
-    return 'skincare'
-  }
-  if (lower.includes('makeup') || lower.includes('glam') || lower.includes('tutorial') || lower.includes('grwm') || lower.includes('get ready')) {
+  if (lower.includes('makeup') || lower.includes('lipstick') || lower.includes('foundation') || lower.includes('mascara') || lower.includes('eyeshadow')) {
     return 'makeup'
   }
-  if (lower.includes('fashion') || lower.includes('outfit') || lower.includes('haul') || lower.includes('style')) {
+  if (lower.includes('skincare') || lower.includes('serum') || lower.includes('moisturizer') || lower.includes('sunscreen') || lower.includes('spf')) {
+    return 'skincare'
+  }
+  if (lower.includes('fashion') || lower.includes('outfit') || lower.includes('style') || lower.includes('clothing')) {
     return 'fashion'
   }
-  if (lower.includes('travel') || lower.includes('vacation') || lower.includes('trip')) {
+  if (lower.includes('travel') || lower.includes('vacation') || lower.includes('trip') || lower.includes('hotel')) {
     return 'travel'
   }
+  
   return 'lifestyle'
 }
 
-// Fix spacing around HTML formatting tags and product links
-function fixFormattingSpaces(content) {
-  if (!content) return content
-  
-  let fixed = content
-  
-  // Add space before opening tags if preceded by a letter/number (not already a space)
-  fixed = fixed.replace(/([a-zA-Z0-9,.'"])(<(?:strong|em|b|i|a|span)[^>]*>)/g, '$1 $2')
-  
-  // Add space after closing tags if followed by a letter/number (not already a space)
-  fixed = fixed.replace(/(<\/(?:strong|em|b|i|a|span)>)([a-zA-Z0-9])/g, '$1 $2')
-  
-  // Fix product link placeholders: [PRODUCT_LINK:Name]
-  fixed = fixed.replace(/([a-zA-Z0-9,.'"])(\[PRODUCT_LINK:)/g, '$1 $2')
-  fixed = fixed.replace(/(\])([a-zA-Z0-9])/g, '$1 $2')
-  
-  // Clean up any double spaces we might have created
-  fixed = fixed.replace(/  +/g, ' ')
-  
-  return fixed
+export default {
+  initClaude,
+  analyzeVideoContent,
+  reviewQuickAnswer
 }
