@@ -17,6 +17,12 @@ export function initSanity(projectId, dataset, token) {
   })
 }
 
+// Export the client instance for other modules (like geo-migrate)
+export function getSanityClient() {
+  if (!client) throw new Error('Sanity client not initialized')
+  return client
+}
+
 // Generate a unique key for array items
 function generateKey() {
   return Math.random().toString(36).substring(2, 10)
@@ -503,6 +509,7 @@ export async function getRecentArticles(limit = 20) {
 
 export default {
   initSanity,
+  getSanityClient,
   checkIfVideoProcessed,
   createDraftBlogPost,
   getRecentDrafts,
