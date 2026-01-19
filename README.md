@@ -64,16 +64,6 @@ Add environment variables
 4. Set Environment Variables
 In DigitalOcean App Settings → Environment Variables:
 
-YOUTUBE_API_KEY=AIza...
-YOUTUBE_CHANNEL_ID=UC...
-ANTHROPIC_API_KEY=sk-ant-...
-AMAZON_ASSOCIATE_TAG=kyndallames-20
-SHOPMY_API_TOKEN=your-token (optional)
-SANITY_PROJECT_ID=f9drkp1w
-SANITY_DATASET=production
-SANITY_API_TOKEN=sk...
-CHECK_INTERVAL_MINUTES=60
-Local Development
 # Install dependencies
 npm install
 
