@@ -236,7 +236,9 @@ export async function createDraftBlogPost({
   const platform = platformMap[platformLower] || 'YouTube'
   
   // Build the document with GEO fields
+  // IMPORTANT: _id starts with "drafts." so it's created as a DRAFT, not published
   const doc = {
+    _id: `drafts.blogPost-${video.id}`,
     _type: 'blogPost',
     title: analysis.blogTitle,
     slug: {
@@ -389,9 +391,9 @@ export async function createDraftBlogPost({
   console.log(`      - FAQs: ${doc.faqSection.length}`)
   console.log(`      - Kyndall's Take: ${doc.kyndallsTake.showKyndallsTake ? 'Yes' : 'No'}`)
   
-  console.log('   Creating blog post in Sanity...')
-  const result = await client.create(doc)
-  console.log('   ✓ Blog post created:', result._id)
+  console.log('   Creating DRAFT blog post in Sanity...')
+  const result = await client.createIfNotExists(doc)
+  console.log('   ✓ Draft created:', result._id)
   return result
 }
 
