@@ -1,248 +1,383 @@
-// Claude AI Content Analysis Service
-// Extracts products from YouTube descriptions and generates blog content
+// kyndall-content-engine/src/amazon.js
+// Amazon Product Advertising API 5.0 Integration
+// Auto-searches Amazon for products and generates affiliate links
+//
+// USAGE:
+//   import { initAmazon, searchAmazonProduct, enrichProductsWithAmazon } from './amazon.js'
+//   
+//   initAmazon({
+//     accessKey: process.env.AMAZON_ACCESS_KEY,
+//     secretKey: process.env.AMAZON_SECRET_KEY,
+//     partnerTag: process.env.AMAZON_ASSOCIATE_TAG
+//   })
+//   
+//   const result = await searchAmazonProduct("Farmacy Green Clean Cleansing Balm")
+//   // Returns: { asin, title, url, price, imageUrl, available }
 
-import Anthropic from '@anthropic-ai/sdk'
+import crypto from 'crypto'
 
-let client = null
-let amazonAssociateTag = 'kyndallames09-20' // Default tag
+// ============================================================
+// CONFIGURATION
+// ============================================================
 
-export function initClaude(apiKey, associateTag) {
-  client = new Anthropic({ apiKey })
-  if (associateTag) {
-    amazonAssociateTag = associateTag
+let config = {
+  accessKey: null,
+  secretKey: null,
+  partnerTag: 'kyndallames-20',
+  marketplace: 'www.amazon.com',
+  region: 'us-east-1',
+  host: 'webservices.amazon.com',
+}
+
+// Simple in-memory cache to avoid repeated API calls
+const cache = new Map()
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
+
+// Rate limiting: 1 request per second max
+let lastRequestTime = 0
+const MIN_REQUEST_INTERVAL_MS = 1100 // Slightly over 1 second to be safe
+
+// ============================================================
+// INITIALIZATION
+// ============================================================
+
+export function initAmazon({ accessKey, secretKey, partnerTag, marketplace = 'www.amazon.com' }) {
+  if (!accessKey || !secretKey) {
+    console.log('   ⚠️  Amazon PA-API credentials not configured - auto-linking disabled')
+    return false
+  }
+  
+  config.accessKey = accessKey
+  config.secretKey = secretKey
+  config.partnerTag = partnerTag || config.partnerTag
+  config.marketplace = marketplace
+  
+  console.log(`   ✓ Amazon PA-API initialized (Partner Tag: ${config.partnerTag})`)
+  return true
+}
+
+export function isAmazonConfigured() {
+  return !!(config.accessKey && config.secretKey)
+}
+
+// ============================================================
+// AWS SIGNATURE V4 SIGNING (Required for PA-API)
+// ============================================================
+
+function getSignatureKey(key, dateStamp, regionName, serviceName) {
+  const kDate = hmac('AWS4' + key, dateStamp)
+  const kRegion = hmac(kDate, regionName)
+  const kService = hmac(kRegion, serviceName)
+  const kSigning = hmac(kService, 'aws4_request')
+  return kSigning
+}
+
+function hmac(key, data) {
+  return crypto.createHmac('sha256', key).update(data, 'utf8').digest()
+}
+
+function hash(data) {
+  return crypto.createHash('sha256').update(data, 'utf8').digest('hex')
+}
+
+function signRequest(payload) {
+  const now = new Date()
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '')
+  const dateStamp = amzDate.slice(0, 8)
+  
+  const service = 'ProductAdvertisingAPI'
+  const endpoint = `https://${config.host}/paapi5/searchitems`
+  const method = 'POST'
+  const contentType = 'application/json; charset=UTF-8'
+  
+  // Create canonical request
+  const canonicalUri = '/paapi5/searchitems'
+  const canonicalQuerystring = ''
+  const canonicalHeaders = [
+    `content-encoding:amz-1.0`,
+    `content-type:${contentType}`,
+    `host:${config.host}`,
+    `x-amz-date:${amzDate}`,
+    `x-amz-target:com.amazon.paapi5.v1.ProductAdvertisingAPIv1.SearchItems`,
+  ].join('\n') + '\n'
+  
+  const signedHeaders = 'content-encoding;content-type;host;x-amz-date;x-amz-target'
+  const payloadHash = hash(JSON.stringify(payload))
+  
+  const canonicalRequest = [
+    method,
+    canonicalUri,
+    canonicalQuerystring,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash
+  ].join('\n')
+  
+  // Create string to sign
+  const algorithm = 'AWS4-HMAC-SHA256'
+  const credentialScope = `${dateStamp}/${config.region}/${service}/aws4_request`
+  const stringToSign = [
+    algorithm,
+    amzDate,
+    credentialScope,
+    hash(canonicalRequest)
+  ].join('\n')
+  
+  // Calculate signature
+  const signingKey = getSignatureKey(config.secretKey, dateStamp, config.region, service)
+  const signature = crypto.createHmac('sha256', signingKey).update(stringToSign, 'utf8').digest('hex')
+  
+  // Create authorization header
+  const authorizationHeader = `${algorithm} Credential=${config.accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`
+  
+  return {
+    endpoint,
+    headers: {
+      'Content-Type': contentType,
+      'Content-Encoding': 'amz-1.0',
+      'Host': config.host,
+      'X-Amz-Date': amzDate,
+      'X-Amz-Target': 'com.amazon.paapi5.v1.ProductAdvertisingAPIv1.SearchItems',
+      'Authorization': authorizationHeader,
+    }
   }
 }
 
-export async function analyzeVideoContent(video) {
-  if (!client) throw new Error('Claude client not initialized')
+// ============================================================
+// RATE LIMITING
+// ============================================================
 
-  console.log(`   Analyzing: "${video.title}"`)
-  console.log(`   Description length: ${video.description?.length || 0} chars`)
-
-  // Extract products from description FIRST
-  const descriptionProducts = extractProductsFromDescription(video.description || '')
-  console.log(`   Found ${descriptionProducts.length} products in description`)
+async function waitForRateLimit() {
+  const now = Date.now()
+  const timeSinceLastRequest = now - lastRequestTime
   
-  if (descriptionProducts.length > 0) {
-    descriptionProducts.forEach(p => {
-      console.log(`      - ${p.brand} ${p.name}`)
-      if (p.shopmyUrl) console.log(`        ShopMy: ${p.shopmyUrl}`)
-      if (p.amazonUrl) console.log(`        Amazon: ${p.amazonUrl}`)
-    })
+  if (timeSinceLastRequest < MIN_REQUEST_INTERVAL_MS) {
+    const waitTime = MIN_REQUEST_INTERVAL_MS - timeSinceLastRequest
+    await new Promise(resolve => setTimeout(resolve, waitTime))
   }
-
-  const prompt = `You are analyzing a YouTube video to create a blog post.
-
-VIDEO TITLE: ${video.title}
-
-VIDEO DESCRIPTION:
-${video.description || 'No description'}
-
-VIDEO TAGS: ${video.tags?.join(', ') || 'No tags'}
-
-PRODUCTS ALREADY EXTRACTED FROM DESCRIPTION (DO NOT MODIFY THESE):
-${descriptionProducts.length > 0 ? JSON.stringify(descriptionProducts, null, 2) : 'None found'}
-
-YOUR TASK:
-1. Generate a blog post about this video
-2. Suggest SEO metadata
-3. Determine the category
-
-NOTE: Products have already been extracted from the description. Do NOT add or modify products.
-
-Respond with ONLY valid JSON (no markdown, no backticks):
-{
-  "category": "makeup|skincare|fashion|lifestyle|travel",
-  "blogTitle": "Engaging blog title (50-60 chars)",
-  "blogExcerpt": "Brief compelling summary (150-160 chars)",
-  "blogContent": "Full blog post (200-400 words) with [PRODUCT_LINK:Product Name] placeholders where products should be linked",
-  "seoTitle": "SEO optimized title (50-60 chars)",
-  "seoDescription": "Meta description for search engines (150-160 chars)",
-  "suggestedTags": ["tag1", "tag2", "tag3"]
-}`
-
-  try {
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
-      messages: [{ role: 'user', content: prompt }]
-    })
-
-    const text = response.content[0].text
-    
-    // Clean up response - remove markdown code blocks if present
-    let cleanText = text
-      .replace(/```json\s*/gi, '')
-      .replace(/```\s*/gi, '')
-      .trim()
-    
-    // Try to extract JSON object
-    const jsonMatch = cleanText.match(/\{[\s\S]*\}/)
-    if (jsonMatch) {
-      cleanText = jsonMatch[0]
-    }
-
-    const analysis = JSON.parse(cleanText)
-    
-    // Use the products we already extracted - don't trust Claude's extraction
-    analysis.products = descriptionProducts
-
-    console.log(`   ✓ Analysis complete, ${analysis.products.length} products`)
-    
-    return analysis
-
-  } catch (error) {
-    console.error('   Claude analysis error:', error.message)
-    
-    // Return basic analysis with description products if Claude fails
-    return {
-      category: guessCategory(video.title + ' ' + video.description),
-      products: descriptionProducts,
-      blogTitle: video.title.substring(0, 60),
-      blogExcerpt: video.title.substring(0, 160),
-      blogContent: `Check out this video: ${video.title}`,
-      seoTitle: video.title.substring(0, 60),
-      seoDescription: video.title.substring(0, 160),
-      suggestedTags: []
-    }
-  }
+  
+  lastRequestTime = Date.now()
 }
 
-// Extract products from YouTube description
-function extractProductsFromDescription(description) {
-  const products = []
+// ============================================================
+// CACHE HELPERS
+// ============================================================
+
+function getCacheKey(searchTerm) {
+  return searchTerm.toLowerCase().trim()
+}
+
+function getFromCache(searchTerm) {
+  const key = getCacheKey(searchTerm)
+  const cached = cache.get(key)
   
-  if (!description) return products
-
-  // Common beauty brands for identification
-  const beautyBrands = [
-    'Benefit Cosmetics', 'Benefit', 'Kylie Cosmetics', 'Kylie', 'Summer Fridays',
-    'Pat McGrath Labs', 'Pat McGrath', 'MAC', 'Patrick Ta', 'Fenty Beauty', 'Fenty',
-    'Kosas', 'Make Up For Ever', 'MUFE', 'Bobbi Brown', 'Rare Beauty',
-    'Charlotte Tilbury', 'NARS', 'Too Faced', 'Urban Decay', 'Tarte',
-    'Glossier', 'Milk Makeup', 'Ilia', 'Tower 28', 'Merit', 'Saie',
-    'Makeup By Mario', 'Laura Mercier', 'Hourglass', 'Armani', 'YSL', 'Dior', 'Chanel',
-    'Estée Lauder', 'Clinique', 'Lancôme', 'Smashbox', 'e.l.f.', 'elf', 'NYX',
-    'Maybelline', 'L\'Oréal', 'Revlon', 'CoverGirl', 'The Ordinary', 'Drunk Elephant',
-    'Tatcha', 'Sunday Riley', 'Supergoop', 'La Mer', 'SK-II', 'Olaplex', 'Dyson',
-    'Moroccan Oil', 'Ouai', 'Sol de Janeiro', 'Gisou', 'Rhode', 'Kiehl\'s',
-    'CeraVe', 'La Roche-Posay', 'Paula\'s Choice', 'Good Molecules', 'Anastasia Beverly Hills',
-    'ABH', 'Huda Beauty', 'Natasha Denona', 'CT', 'PMG'
-  ]
-
-  // METHOD 1: Look for "PRODUCTS:" section (most reliable for Kyndall's format)
-  const productsMatch = description.match(/PRODUCTS?:?\s*([\s\S]*?)(?=\n\n|\nFOLLOW|\nSUBSCRIBE|\nBUSINESS|\nMUSIC|\n[A-Z]{2,}:|$)/i)
+  if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+    return cached.data
+  }
   
-  if (productsMatch) {
-    const productsSection = productsMatch[1]
-    console.log(`      Found PRODUCTS section`)
-    
-    // Match: "Product Name - URL" or "Product Name URL"
-    const productPattern = /([^-\n]+(?:\s+"[^"]+")?\s*)-?\s*(https?:\/\/[^\s]+)/g
-    let match
-    
-    while ((match = productPattern.exec(productsSection)) !== null) {
-      const fullProductName = match[1].trim()
-      const url = match[2].trim()
-      
-      // Parse brand and product name
-      const { brand, name } = extractBrandAndName(fullProductName, beautyBrands)
-      
-      // Determine URL type and process accordingly
-      let shopmyUrl = null
-      let amazonUrl = null
-      
-      if (url.includes('shopmy.us') || url.includes('go.shopmy.us') || url.includes('shop-links.co')) {
-        // ShopMy link - use as-is (already has affiliate tracking)
-        shopmyUrl = url
-      } else if (url.includes('amazon.com') || url.includes('amzn.to') || url.includes('amzn.com')) {
-        // Amazon link - add associate tag for affiliate credit
-        amazonUrl = addAmazonAssociateTag(url)
-      }
-      
-      products.push({
-        brand,
-        name,
-        type: guessProductType(fullProductName),
-        searchQuery: `${brand} ${name}`.trim(),
-        shopmyUrl,
-        amazonUrl,
-        originalUrl: url
-      })
-    }
-  }
+  return null
+}
 
-  // METHOD 2: If no PRODUCTS section, scan whole description for product links
-  if (products.length === 0) {
-    const lines = description.split('\n')
-    
-    for (const line of lines) {
-      const trimmedLine = line.trim()
-      if (!trimmedLine) continue
-      
-      // Skip non-product lines
-      if (trimmedLine.toLowerCase().includes('follow me') ||
-          trimmedLine.toLowerCase().includes('subscribe') ||
-          trimmedLine.toLowerCase().includes('business') ||
-          trimmedLine.toLowerCase().includes('instagram:') ||
-          trimmedLine.toLowerCase().includes('tiktok:') ||
-          trimmedLine.toLowerCase().includes('twitter:')) {
-        continue
-      }
-      
-      // Look for lines with URLs
-      const urlMatch = trimmedLine.match(/(.+?)\s*[-–:]?\s*(https?:\/\/[^\s]+)/i)
-      
-      if (urlMatch) {
-        const productName = urlMatch[1].replace(/^[•\-\*\d.]\s*/, '').trim()
-        const url = urlMatch[2]
-        
-        // Skip if product name is too short or looks like a section header
-        if (productName.length < 3 || productName.toUpperCase() === productName) continue
-        
-        const { brand, name } = extractBrandAndName(productName, beautyBrands)
-        
-        let shopmyUrl = null
-        let amazonUrl = null
-        
-        if (url.includes('shopmy.us') || url.includes('go.shopmy.us') || url.includes('shop-links.co')) {
-          shopmyUrl = url
-        } else if (url.includes('amazon.com') || url.includes('amzn.to') || url.includes('amzn.com')) {
-          amazonUrl = addAmazonAssociateTag(url)
-        }
-        
-        // Only add if it's an affiliate link we recognize
-        if (shopmyUrl || amazonUrl || url.includes('rstyle') || url.includes('liketoknow') || url.includes('ltk.app')) {
-          products.push({
-            brand,
-            name,
-            type: guessProductType(productName),
-            searchQuery: `${brand} ${name}`.trim(),
-            shopmyUrl,
-            amazonUrl,
-            originalUrl: url
-          })
-        }
-      }
-    }
-  }
-
-  // Remove duplicates based on URL
-  const seen = new Set()
-  return products.filter(p => {
-    const key = p.originalUrl || `${p.brand}-${p.name}`.toLowerCase()
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
+function saveToCache(searchTerm, data) {
+  const key = getCacheKey(searchTerm)
+  cache.set(key, {
+    data,
+    timestamp: Date.now()
   })
 }
 
-// Add Amazon Associate tag to URL for affiliate credit
-function addAmazonAssociateTag(url) {
+// ============================================================
+// MAIN SEARCH FUNCTION
+// ============================================================
+
+/**
+ * Search Amazon for a product and return affiliate link
+ * @param {string} searchTerm - Product name to search (e.g., "Farmacy Green Clean")
+ * @param {string} category - Optional category hint (e.g., "Beauty")
+ * @returns {Object|null} - Product info with affiliate URL, or null if not found
+ */
+export async function searchAmazonProduct(searchTerm, category = 'Beauty') {
+  if (!isAmazonConfigured()) {
+    return null
+  }
+  
+  // Check cache first
+  const cached = getFromCache(searchTerm)
+  if (cached !== null) {
+    console.log(`      📦 Amazon (cached): ${cached ? cached.title?.substring(0, 40) + '...' : 'Not found'}`)
+    return cached
+  }
+  
+  // Rate limit
+  await waitForRateLimit()
+  
+  const payload = {
+    "Keywords": searchTerm,
+    "Resources": [
+      "Images.Primary.Large",
+      "ItemInfo.Title",
+      "ItemInfo.ByLineInfo",
+      "Offers.Listings.Price",
+      "Offers.Listings.Availability.Type"
+    ],
+    "SearchIndex": category,
+    "ItemCount": 3,
+    "PartnerTag": config.partnerTag,
+    "PartnerType": "Associates",
+    "Marketplace": config.marketplace
+  }
+  
   try {
-    // Handle amzn.to short links - can't modify, but they should already have tracking
+    const { endpoint, headers } = signRequest(payload)
+    
+    console.log(`      🔍 Searching Amazon for: "${searchTerm}"`)
+    
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload)
+    })
+    
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.log(`      ❌ Amazon API error: ${response.status}`)
+      
+      // Handle specific errors
+      if (response.status === 429) {
+        console.log('      ⚠️  Rate limited - will retry later')
+      } else if (response.status === 401 || response.status === 403) {
+        console.log('      ⚠️  Authentication failed - check API credentials')
+      }
+      
+      saveToCache(searchTerm, null)
+      return null
+    }
+    
+    const data = await response.json()
+    
+    // Check if we got results
+    if (!data.SearchResult?.Items?.length) {
+      console.log(`      ℹ️  No Amazon results for: "${searchTerm}"`)
+      saveToCache(searchTerm, null)
+      return null
+    }
+    
+    // Get the best match (first result)
+    const item = data.SearchResult.Items[0]
+    
+    const result = {
+      asin: item.ASIN,
+      title: item.ItemInfo?.Title?.DisplayValue || searchTerm,
+      url: `https://www.amazon.com/dp/${item.ASIN}?tag=${config.partnerTag}`,
+      detailPageUrl: item.DetailPageURL,
+      price: item.Offers?.Listings?.[0]?.Price?.DisplayAmount || null,
+      imageUrl: item.Images?.Primary?.Large?.URL || null,
+      brand: item.ItemInfo?.ByLineInfo?.Brand?.DisplayValue || null,
+      available: item.Offers?.Listings?.[0]?.Availability?.Type === 'Now',
+    }
+    
+    console.log(`      ✓ Found: ${result.title.substring(0, 50)}... (${result.price || 'Price N/A'})`)
+    
+    saveToCache(searchTerm, result)
+    return result
+    
+  } catch (error) {
+    console.log(`      ❌ Amazon search error: ${error.message}`)
+    saveToCache(searchTerm, null)
+    return null
+  }
+}
+
+// ============================================================
+// BATCH ENRICHMENT FUNCTION
+// ============================================================
+
+/**
+ * Enrich an array of products with Amazon links
+ * Searches ALL products to provide both ShopMy AND Amazon options
+ * @param {Array} products - Array of product objects from extraction
+ * @param {Object} options - Options for enrichment
+ * @returns {Array} - Products with amazonUrl added where found
+ */
+export async function enrichProductsWithAmazon(products, options = {}) {
+  if (!isAmazonConfigured()) {
+    console.log('   ⚠️  Amazon PA-API not configured - skipping enrichment')
+    return products
+  }
+  
+  const {
+    maxProducts = 50,          // Limit to avoid rate limits (increased for full coverage)
+    category = 'Beauty'
+  } = options
+  
+  console.log(`   🛒 Searching Amazon for ALL ${products.length} products...`)
+  
+  let enriched = 0
+  let alreadyHadAmazon = 0
+  
+  for (let i = 0; i < products.length && i < maxProducts; i++) {
+    const product = products[i]
+    
+    // Skip if already has Amazon link from description
+    if (product.amazonUrl) {
+      alreadyHadAmazon++
+      continue
+    }
+    
+    // Build search query
+    const searchQuery = product.searchQuery || 
+      `${product.brand !== 'Unknown' ? product.brand + ' ' : ''}${product.name}`.trim()
+    
+    if (!searchQuery || searchQuery === 'Unknown' || searchQuery.length < 3) {
+      continue
+    }
+    
+    // Search Amazon (even if product has ShopMy - we want BOTH)
+    const amazonResult = await searchAmazonProduct(searchQuery, category)
+    
+    if (amazonResult) {
+      product.amazonUrl = amazonResult.url
+      product.amazonAsin = amazonResult.asin
+      product.amazonPrice = amazonResult.price
+      product.amazonTitle = amazonResult.title
+      product.amazonImageUrl = amazonResult.imageUrl
+      enriched++
+    }
+  }
+  
+  console.log(`   ✓ Amazon enrichment complete:`)
+  console.log(`      - ${enriched} new Amazon links found`)
+  console.log(`      - ${alreadyHadAmazon} already had Amazon links`)
+  console.log(`      - Products now have: ShopMy + Amazon where available`)
+  
+  return products
+}
+
+// ============================================================
+// UTILITY FUNCTIONS
+// ============================================================
+
+/**
+ * Generate Amazon search URL (fallback when API unavailable)
+ * @param {string} searchTerm - Product name
+ * @returns {string} - Amazon search URL with affiliate tag
+ */
+export function getAmazonSearchUrl(searchTerm) {
+  const encoded = encodeURIComponent(searchTerm)
+  return `https://www.amazon.com/s?k=${encoded}&tag=${config.partnerTag}`
+}
+
+/**
+ * Add affiliate tag to existing Amazon URL
+ * @param {string} url - Amazon product URL
+ * @returns {string} - URL with affiliate tag
+ */
+export function addAffiliateTag(url) {
+  if (!url) return url
+  
+  try {
+    // Handle amzn.to short links - can't modify
     if (url.includes('amzn.to')) {
-      console.log(`        ℹ️  Short Amazon link (amzn.to) - using as-is`)
       return url
     }
     
@@ -250,106 +385,52 @@ function addAmazonAssociateTag(url) {
     
     // Check if tag already exists
     if (urlObj.searchParams.has('tag')) {
-      const existingTag = urlObj.searchParams.get('tag')
-      console.log(`        ℹ️  Amazon link already has tag: ${existingTag}`)
       return url
     }
     
     // Add the associate tag
-    urlObj.searchParams.set('tag', amazonAssociateTag)
-    
-    console.log(`        ✓ Added Amazon Associate tag: ${amazonAssociateTag}`)
+    urlObj.searchParams.set('tag', config.partnerTag)
     return urlObj.toString()
     
-  } catch (error) {
-    console.log(`        ⚠️  Could not parse Amazon URL, using as-is`)
-    // If URL parsing fails, try simple string append
+  } catch {
+    // Fallback: simple string append
     if (url.includes('?')) {
-      return `${url}&tag=${amazonAssociateTag}`
+      return `${url}&tag=${config.partnerTag}`
     } else {
-      return `${url}?tag=${amazonAssociateTag}`
+      return `${url}?tag=${config.partnerTag}`
     }
   }
 }
 
-function extractBrandAndName(fullProductName, beautyBrands) {
-  let brand = 'Unknown'
-  let name = fullProductName
-  
-  // Sort brands by length (longest first) to match "Benefit Cosmetics" before "Benefit"
-  const sortedBrands = [...beautyBrands].sort((a, b) => b.length - a.length)
-  
-  for (const b of sortedBrands) {
-    const regex = new RegExp(`^${escapeRegex(b)}\\s+`, 'i')
-    if (regex.test(fullProductName)) {
-      brand = b
-      name = fullProductName.replace(regex, '').trim()
-      break
-    }
-  }
-  
-  // Clean up name - remove quotes around shade names but keep the shade
-  name = name.replace(/"/g, '')
-  
-  return { brand, name }
+/**
+ * Clear the cache (useful for testing)
+ */
+export function clearCache() {
+  cache.clear()
+  console.log('   🧹 Amazon cache cleared')
 }
 
-function escapeRegex(string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/**
+ * Get cache stats
+ */
+export function getCacheStats() {
+  return {
+    size: cache.size,
+    entries: Array.from(cache.keys())
+  }
 }
 
-function guessProductType(text) {
-  const lower = text.toLowerCase()
-  
-  if (lower.includes('foundation') || lower.includes('concealer') || lower.includes('powder') ||
-      lower.includes('blush') || lower.includes('bronzer') || lower.includes('highlighter') ||
-      lower.includes('lipstick') || lower.includes('lip ') || lower.includes('mascara') ||
-      lower.includes('eyeliner') || lower.includes('eyeshadow') || lower.includes('brow') ||
-      lower.includes('primer') || lower.includes('setting') || lower.includes('contour') ||
-      lower.includes('tint') || lower.includes('pencil') || lower.includes('balm')) {
-    return 'makeup'
-  }
-  
-  if (lower.includes('serum') || lower.includes('moisturizer') || lower.includes('cleanser') ||
-      lower.includes('toner') || lower.includes('sunscreen') || lower.includes('spf') ||
-      lower.includes('retinol') || lower.includes('vitamin c') || lower.includes('mask') ||
-      lower.includes('exfoliant') || lower.includes('cream') || lower.includes('lotion')) {
-    return 'skincare'
-  }
-  
-  if (lower.includes('shampoo') || lower.includes('conditioner') || lower.includes('hair') ||
-      lower.includes('oil') || lower.includes('styling') || lower.includes('olaplex')) {
-    return 'haircare'
-  }
-  
-  if (lower.includes('perfume') || lower.includes('fragrance') || lower.includes('cologne') ||
-      lower.includes('body mist') || lower.includes('eau de')) {
-    return 'fragrance'
-  }
-  
-  if (lower.includes('brush') || lower.includes('sponge') || lower.includes('curler') ||
-      lower.includes('dryer') || lower.includes('straightener') || lower.includes('dyson') ||
-      lower.includes('mirror') || lower.includes('organizer')) {
-    return 'tools'
-  }
-  
-  return 'makeup' // Default to makeup for beauty content
-}
+// ============================================================
+// DEFAULT EXPORT
+// ============================================================
 
-function guessCategory(text) {
-  const lower = text.toLowerCase()
-  
-  if (lower.includes('skincare') || lower.includes('skin care') || lower.includes('routine')) {
-    return 'skincare'
-  }
-  if (lower.includes('makeup') || lower.includes('glam') || lower.includes('tutorial') || lower.includes('grwm') || lower.includes('get ready')) {
-    return 'makeup'
-  }
-  if (lower.includes('fashion') || lower.includes('outfit') || lower.includes('haul') || lower.includes('style')) {
-    return 'fashion'
-  }
-  if (lower.includes('travel') || lower.includes('vacation') || lower.includes('trip')) {
-    return 'travel'
-  }
-  return 'lifestyle'
+export default {
+  initAmazon,
+  isAmazonConfigured,
+  searchAmazonProduct,
+  enrichProductsWithAmazon,
+  getAmazonSearchUrl,
+  addAffiliateTag,
+  clearCache,
+  getCacheStats
 }
