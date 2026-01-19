@@ -304,11 +304,13 @@ export async function createDraftBlogPost({
     
     // Author (use default)
     useDefaultAuthor: true,
-    author: null,
+    // NOTE: Don't set author to null - Sanity rejects null for reference types
+    // The field will be undefined/absent, which is correct for "use default author"
     
     // Banner (use category default)
     useCustomBanner: false,
-    customBannerImage: null,
+    // NOTE: Don't set customBannerImage to null - Sanity rejects null for image types
+    // The field will be undefined/absent, which is correct when useCustomBanner is false
     
     // Related posts (empty - will be auto-filled on frontend)
     relatedPosts: [],
