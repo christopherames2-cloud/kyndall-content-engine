@@ -1,17 +1,29 @@
 // kyndall-content-engine/src/claude.js
 // Claude AI Content Analysis Service
 // Extracts products from YouTube descriptions and generates blog content
-// NOW WITH GEO CONTENT GENERATION (quickAnswer, keyTakeaways, expertTips, faqSection, kyndallsTake)
+// NOW WITH GEO CONTENT GENERATION + SANITY-MANAGED BRANDS
+//
+// UPDATED: January 2026
+// - Fixed product extraction for space-separated products
+// - Uses centralized brands module (fetches from Sanity)
+// - Proper handling of trailing dashes in product names
 
 import Anthropic from '@anthropic-ai/sdk'
+import { getBrands, initBrands } from './brands.js'
+import { enrichProductsWithAmazon, isAmazonConfigured } from './amazon.js'
 
 let client = null
 let amazonAssociateTag = 'kyndallames09-20' // Default tag
 
-export function initClaude(apiKey, associateTag) {
+export function initClaude(apiKey, associateTag, sanityConfig = null) {
   client = new Anthropic({ apiKey })
   if (associateTag) {
     amazonAssociateTag = associateTag
+  }
+  
+  // Initialize brands module with Sanity config if provided
+  if (sanityConfig) {
+    initBrands(sanityConfig.projectId, sanityConfig.dataset, sanityConfig.token)
   }
 }
 
@@ -22,8 +34,13 @@ export async function analyzeVideoContent(video) {
   console.log(`   Description length: ${video.description?.length || 0} chars`)
 
   // Extract products from description FIRST
-  const descriptionProducts = extractProductsFromDescription(video.description || '')
+  let descriptionProducts = await extractProductsFromDescription(video.description || '')
   console.log(`   Found ${descriptionProducts.length} products in description`)
+  
+  // Enrich products with Amazon links (for those without ShopMy links)
+  if (isAmazonConfigured() && descriptionProducts.length > 0) {
+    descriptionProducts = await enrichProductsWithAmazon(descriptionProducts)
+  }
   
   if (descriptionProducts.length > 0) {
     descriptionProducts.forEach(p => {
@@ -240,6 +257,10 @@ Be encouraging but honest. The goal is to help, not criticize.`
   }
 }
 
+// ============================================================
+// HELPER FUNCTIONS
+// ============================================================
+
 // Fix spacing issues around HTML formatting
 function fixFormattingSpaces(html) {
   if (!html) return html
@@ -257,133 +278,270 @@ function fixFormattingSpaces(html) {
   return html
 }
 
-// Extract products from YouTube description
-function extractProductsFromDescription(description) {
-  const products = []
+function escapeRegex(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Extract brand and product name from a full product string
+ * e.g., "Farmacy Green Clean Cleansing Balm" → { brand: "Farmacy", name: "Green Clean Cleansing Balm" }
+ */
+function extractBrandAndName(fullProductName, beautyBrands) {
+  let brand = 'Unknown'
+  let name = fullProductName
   
-  if (!description) return products
-
-  // Common beauty brands for identification
-  const beautyBrands = [
-    'Benefit Cosmetics', 'Benefit', 'Kylie Cosmetics', 'Kylie', 'Summer Fridays',
-    'Pat McGrath Labs', 'Pat McGrath', 'MAC', 'Patrick Ta', 'Fenty Beauty', 'Fenty',
-    'Kosas', 'Make Up For Ever', 'MUFE', 'Bobbi Brown', 'Rare Beauty',
-    'Charlotte Tilbury', 'NARS', 'Too Faced', 'Urban Decay', 'Tarte',
-    'Glossier', 'Milk Makeup', 'Ilia', 'Tower 28', 'Merit', 'Saie',
-    'Makeup By Mario', 'Laura Mercier', 'Hourglass', 'Armani', 'YSL', 'Dior', 'Chanel',
-    'Estée Lauder', 'Clinique', 'Lancôme', 'Smashbox', 'e.l.f.', 'elf', 'NYX',
-    'Maybelline', 'L\'Oreal', 'Revlon', 'CoverGirl', 'Neutrogena',
-    'CeraVe', 'La Roche-Posay', 'The Ordinary', 'Paula\'s Choice', 'Drunk Elephant',
-    'Tatcha', 'SK-II', 'Glow Recipe', 'Youth To The People', 'Supergoop',
-    'Olaplex', 'Dyson', 'Ouai', 'Briogeo', 'Moroccanoil', 'Living Proof',
-    'Peach & Lily', 'Laneige', 'Innisfree', 'COSRX', 'Some By Mi',
-    'Pixi', 'First Aid Beauty', 'Origins', 'Fresh', 'Kiehl\'s',
-    'Sol de Janeiro', 'Brazilian Bum Bum', 'Kopari', 'Nécessaire',
-    'Augustinus Bader', 'La Mer', 'Sunday Riley', 'Dr. Dennis Gross'
-  ]
-
-  // ShopMy link patterns
-  const shopmyPatterns = [
-    /(?:https?:\/\/)?(?:www\.)?shopmy\.us\/[^\s]+/gi,
-    /(?:https?:\/\/)?(?:www\.)?shop-links\.co\/[^\s]+/gi,
-    /(?:https?:\/\/)?(?:www\.)?shopstyle\.it\/[^\s]+/gi,
-  ]
-
-  // Amazon link patterns
-  const amazonPatterns = [
-    /(?:https?:\/\/)?(?:www\.)?(?:amazon\.com|amzn\.to|amzn\.com)\/[^\s]+/gi,
-    /(?:https?:\/\/)?(?:www\.)?a\.co\/[^\s]+/gi,
-  ]
-
-  // Split into lines
-  const lines = description.split('\n')
+  // FIRST: Clean the product name of trailing dashes/hyphens
+  name = name
+    .replace(/\s*[-–—]\s*$/, '')  // Remove trailing dash/en-dash/em-dash
+    .replace(/\s+$/, '')           // Remove trailing whitespace
+    .trim()
   
-  for (const line of lines) {
-    const trimmedLine = line.trim()
-    if (!trimmedLine) continue
-    
-    // Check for ShopMy links
-    let shopmyUrl = null
-    for (const pattern of shopmyPatterns) {
-      const match = trimmedLine.match(pattern)
-      if (match) {
-        shopmyUrl = match[0]
-        break
-      }
-    }
-    
-    // Check for Amazon links
-    let amazonUrl = null
-    for (const pattern of amazonPatterns) {
-      const match = trimmedLine.match(pattern)
-      if (match) {
-        amazonUrl = match[0]
-        break
-      }
-    }
-    
-    // If we found a link, try to extract product info
-    if (shopmyUrl || amazonUrl) {
-      // Try to find brand and product name
-      let brand = null
-      let productName = null
-      
-      // Check for brand in line
-      for (const b of beautyBrands) {
-        if (trimmedLine.toLowerCase().includes(b.toLowerCase())) {
-          brand = b
-          break
-        }
-      }
-      
-      // Extract product name (text before the link, or after brand)
-      const textBeforeLink = trimmedLine.split(/https?:\/\//)[0].trim()
-      if (textBeforeLink) {
-        // Remove common prefixes
-        productName = textBeforeLink
-          .replace(/^[-•*]\s*/, '')
-          .replace(/^(?:Use code|Code|Discount).*$/i, '')
-          .trim()
-        
-        // If we found a brand, remove it from product name
-        if (brand && productName.toLowerCase().startsWith(brand.toLowerCase())) {
-          productName = productName.substring(brand.length).trim()
-        }
-      }
-      
-      if (productName || brand) {
-        products.push({
-          brand: brand || 'Unknown',
-          name: productName || 'Product',
-          shopmyUrl: shopmyUrl || null,
-          amazonUrl: amazonUrl || null,
-          originalUrl: shopmyUrl || amazonUrl
-        })
-      }
+  // Brands are already sorted by length (longest first)
+  for (const b of beautyBrands) {
+    const regex = new RegExp(`^${escapeRegex(b)}\\s+`, 'i')
+    if (regex.test(name)) {
+      brand = b
+      name = name.replace(regex, '').trim()
+      break
     }
   }
   
-  return products
+  // Clean up name - remove quotes around shade names but keep the shade
+  name = name.replace(/"/g, '')
+  
+  // Additional cleanup: remove any remaining trailing dashes
+  name = name.replace(/\s*[-–—]\s*$/, '').trim()
+  
+  return { brand, name }
+}
+
+/**
+ * Guess the product type based on keywords in the name
+ */
+function guessProductType(text) {
+  const lower = text.toLowerCase()
+  
+  // Makeup
+  if (lower.includes('foundation') || lower.includes('concealer') || lower.includes('powder') ||
+      lower.includes('blush') || lower.includes('bronzer') || lower.includes('highlighter') ||
+      lower.includes('lipstick') || lower.includes('lip ') || lower.includes('mascara') ||
+      lower.includes('eyeliner') || lower.includes('eyeshadow') || lower.includes('brow') ||
+      lower.includes('primer') || lower.includes('setting') || lower.includes('contour') ||
+      lower.includes('tint') || lower.includes('pencil') || lower.includes('balm') ||
+      lower.includes('gloss') || lower.includes('palette')) {
+    return 'makeup'
+  }
+  
+  // Skincare
+  if (lower.includes('serum') || lower.includes('moisturizer') || lower.includes('cleanser') ||
+      lower.includes('toner') || lower.includes('sunscreen') || lower.includes('spf') ||
+      lower.includes('retinol') || lower.includes('vitamin c') || lower.includes('mask') ||
+      lower.includes('exfoliant') || lower.includes('cream') || lower.includes('lotion') ||
+      lower.includes('wash') || lower.includes('acid') || lower.includes('oil')) {
+    return 'skincare'
+  }
+  
+  // Haircare
+  if (lower.includes('shampoo') || lower.includes('conditioner') || lower.includes('hair') ||
+      lower.includes('styling') || lower.includes('olaplex') || lower.includes('dry shampoo')) {
+    return 'haircare'
+  }
+  
+  // Fragrance
+  if (lower.includes('perfume') || lower.includes('fragrance') || lower.includes('cologne') ||
+      lower.includes('body mist') || lower.includes('eau de')) {
+    return 'fragrance'
+  }
+  
+  // Body care
+  if (lower.includes('body') || lower.includes('scrub') || lower.includes('bath') ||
+      lower.includes('hand') || lower.includes('soak')) {
+    return 'bodycare'
+  }
+  
+  // Tools
+  if (lower.includes('brush') || lower.includes('sponge') || lower.includes('curler') ||
+      lower.includes('dryer') || lower.includes('straightener') || lower.includes('dyson') ||
+      lower.includes('mirror') || lower.includes('organizer') || lower.includes('spoolie')) {
+    return 'tools'
+  }
+  
+  return 'other'
 }
 
 // Guess category from text
 function guessCategory(text) {
   const lower = text.toLowerCase()
   
-  if (lower.includes('makeup') || lower.includes('lipstick') || lower.includes('foundation') || lower.includes('mascara') || lower.includes('eyeshadow')) {
+  if (lower.includes('makeup') || lower.includes('lipstick') || lower.includes('foundation') || 
+      lower.includes('mascara') || lower.includes('eyeshadow') || lower.includes('grwm') ||
+      lower.includes('get ready')) {
     return 'makeup'
   }
-  if (lower.includes('skincare') || lower.includes('serum') || lower.includes('moisturizer') || lower.includes('sunscreen') || lower.includes('spf')) {
+  if (lower.includes('skincare') || lower.includes('serum') || lower.includes('moisturizer') || 
+      lower.includes('sunscreen') || lower.includes('spf') || lower.includes('routine')) {
     return 'skincare'
   }
-  if (lower.includes('fashion') || lower.includes('outfit') || lower.includes('style') || lower.includes('clothing')) {
+  if (lower.includes('fashion') || lower.includes('outfit') || lower.includes('style') || 
+      lower.includes('clothing') || lower.includes('haul')) {
     return 'fashion'
   }
-  if (lower.includes('travel') || lower.includes('vacation') || lower.includes('trip') || lower.includes('hotel')) {
+  if (lower.includes('travel') || lower.includes('vacation') || lower.includes('trip') || 
+      lower.includes('hotel')) {
     return 'travel'
   }
   
   return 'lifestyle'
+}
+
+// ============================================================
+// MAIN EXTRACTION FUNCTION (ASYNC - fetches brands from Sanity)
+// ============================================================
+
+async function extractProductsFromDescription(description) {
+  const products = []
+  
+  if (!description) return products
+
+  // Get brands from Sanity (or fallback)
+  const beautyBrands = await getBrands()
+
+  // Helper to add Amazon associate tag
+  function addAmazonAssociateTag(url) {
+    try {
+      if (url.includes('amzn.to')) return url
+      const urlObj = new URL(url)
+      if (!urlObj.searchParams.has('tag')) {
+        urlObj.searchParams.set('tag', amazonAssociateTag)
+      }
+      return urlObj.toString()
+    } catch {
+      return url.includes('?') ? `${url}&tag=${amazonAssociateTag}` : `${url}?tag=${amazonAssociateTag}`
+    }
+  }
+
+  // METHOD 1: Look for "PRODUCTS:" or "PRODUCTS MENTIONED:" section
+  const productsMatch = description.match(/PRODUCTS?\s*(?:MENTIONED)?:?\s*([\s\S]*?)(?=\n\n|\nFOLLOW|\nSUBSCRIBE|\nBUSINESS|\nMUSIC|\n[A-Z]{2,}:|$)/i)
+  
+  if (productsMatch) {
+    const productsSection = productsMatch[1]
+    console.log(`      Found PRODUCTS section`)
+    
+    // Extract all URLs and split text by URLs
+    // This handles both space-separated and newline-separated products
+    const urlPattern = /https?:\/\/[^\s]+/g
+    const urls = productsSection.match(urlPattern) || []
+    const textParts = productsSection.split(urlPattern)
+    
+    console.log(`      Found ${urls.length} URLs`)
+    
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i].trim()
+      let productText = textParts[i] || ''
+      
+      // Clean the product text:
+      // - Remove leading/trailing whitespace
+      // - Remove trailing dash/en-dash that separates name from URL
+      // - Remove leading dash if this follows a previous URL
+      productText = productText
+        .trim()
+        .replace(/\s*[-–—]+\s*$/, '')  // Remove trailing separator
+        .replace(/^\s*[-–—]+\s*/, '')   // Remove leading separator
+        .trim()
+      
+      // Skip empty or too-short product names
+      if (!productText || productText.length < 2) continue
+      
+      // Skip generic items
+      if (productText.toLowerCase() === 'shop my:') continue
+      
+      // Parse brand and product name
+      const { brand, name } = extractBrandAndName(productText, beautyBrands)
+      
+      // Determine URL type
+      let shopmyUrl = null
+      let amazonUrl = null
+      
+      if (url.includes('shopmy.us') || url.includes('go.shopmy.us') || url.includes('shop-links.co')) {
+        shopmyUrl = url  // Preserve full URL
+      } else if (url.includes('amazon.com') || url.includes('amzn.to') || url.includes('amzn.com')) {
+        amazonUrl = addAmazonAssociateTag(url)
+      }
+      
+      products.push({
+        brand,
+        name,
+        type: guessProductType(productText),
+        searchQuery: `${brand} ${name}`.trim(),
+        shopmyUrl,
+        amazonUrl,
+        originalUrl: url
+      })
+    }
+  }
+
+  // METHOD 2: Fallback - scan whole description line by line
+  if (products.length === 0) {
+    const lines = description.split('\n')
+    
+    for (const line of lines) {
+      const trimmedLine = line.trim()
+      if (!trimmedLine) continue
+      
+      // Skip non-product lines
+      const skipPatterns = [
+        'follow me', 'subscribe', 'business', 'instagram:', 
+        'tiktok:', 'twitter:', 'shop my:'
+      ]
+      if (skipPatterns.some(p => trimmedLine.toLowerCase().includes(p))) continue
+      
+      // Look for lines with URLs
+      const urlMatch = trimmedLine.match(/(.+?)\s*[-–:]?\s*(https?:\/\/[^\s]+)/i)
+      
+      if (urlMatch) {
+        const productName = urlMatch[1]
+          .replace(/^[•\-\*\d.]\s*/, '')
+          .replace(/\s*[-–]\s*$/, '')
+          .trim()
+        const url = urlMatch[2]
+        
+        if (productName.length < 3 || productName.toUpperCase() === productName) continue
+        
+        const { brand, name } = extractBrandAndName(productName, beautyBrands)
+        
+        let shopmyUrl = null
+        let amazonUrl = null
+        
+        if (url.includes('shopmy.us') || url.includes('go.shopmy.us') || url.includes('shop-links.co')) {
+          shopmyUrl = url
+        } else if (url.includes('amazon.com') || url.includes('amzn.to') || url.includes('amzn.com')) {
+          amazonUrl = addAmazonAssociateTag(url)
+        }
+        
+        const affiliateTypes = ['shopmy', 'amazon', 'rstyle', 'liketoknow', 'ltk.app']
+        if (affiliateTypes.some(t => url.includes(t))) {
+          products.push({
+            brand,
+            name,
+            type: guessProductType(productName),
+            searchQuery: `${brand} ${name}`.trim(),
+            shopmyUrl,
+            amazonUrl,
+            originalUrl: url
+          })
+        }
+      }
+    }
+  }
+
+  // Remove duplicates
+  const seen = new Set()
+  return products.filter(p => {
+    const key = p.originalUrl || `${p.brand}-${p.name}`.toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 export default {
