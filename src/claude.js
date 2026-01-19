@@ -162,6 +162,11 @@ Respond with ONLY valid JSON (no markdown, no backticks):
     
     // Use the products we already extracted - don't trust Claude's extraction
     analysis.products = descriptionProducts
+    
+    // CRITICAL: Replace [PRODUCT_LINK:...] placeholders with actual HTML links
+    if (analysis.blogContent && descriptionProducts.length > 0) {
+      analysis.blogContent = replaceProductLinkPlaceholders(analysis.blogContent, descriptionProducts)
+    }
 
     console.log(`   ✓ Analysis complete, ${analysis.products.length} products`)
     console.log(`   ✓ GEO content: quickAnswer, ${analysis.keyTakeaways?.length || 0} takeaways, ${analysis.expertTips?.length || 0} tips, ${analysis.faqSection?.length || 0} FAQs`)
@@ -276,6 +281,81 @@ function fixFormattingSpaces(html) {
   html = html.replace(/\](\w)/gi, '] $1')
   
   return html
+}
+
+/**
+ * Replace [PRODUCT_LINK:Product Name] placeholders with actual HTML links
+ * Uses ShopMy URL (preferred) or Amazon URL as fallback
+ */
+function replaceProductLinkPlaceholders(content, products) {
+  if (!content || !products || products.length === 0) return content
+  
+  // Find all [PRODUCT_LINK:...] patterns
+  const placeholderRegex = /\[PRODUCT_LINK:([^\]]+)\]/gi
+  
+  return content.replace(placeholderRegex, (match, productName) => {
+    const searchName = productName.trim().toLowerCase()
+    
+    // Find matching product - try multiple matching strategies
+    let matchedProduct = null
+    
+    // 1. Exact match on full name (brand + product name)
+    matchedProduct = products.find(p => {
+      const fullName = `${p.brand} ${p.name}`.toLowerCase()
+      return fullName === searchName
+    })
+    
+    // 2. Match on product name only
+    if (!matchedProduct) {
+      matchedProduct = products.find(p => 
+        p.name.toLowerCase() === searchName
+      )
+    }
+    
+    // 3. Partial match - product name contains search term
+    if (!matchedProduct) {
+      matchedProduct = products.find(p => {
+        const fullName = `${p.brand} ${p.name}`.toLowerCase()
+        return fullName.includes(searchName) || searchName.includes(fullName)
+      })
+    }
+    
+    // 4. Fuzzy match - search term contains brand and part of name
+    if (!matchedProduct) {
+      matchedProduct = products.find(p => {
+        const brandLower = p.brand.toLowerCase()
+        const nameLower = p.name.toLowerCase()
+        return (searchName.includes(brandLower) && 
+                (searchName.includes(nameLower.split(' ')[0]) || 
+                 nameLower.includes(searchName.replace(brandLower, '').trim())))
+      })
+    }
+    
+    // 5. Last resort - any product where brand matches
+    if (!matchedProduct) {
+      matchedProduct = products.find(p => 
+        searchName.includes(p.brand.toLowerCase())
+      )
+    }
+    
+    if (matchedProduct) {
+      // Prefer ShopMy URL, fallback to Amazon
+      const url = matchedProduct.shopmyUrl || matchedProduct.amazonUrl
+      const displayName = productName.trim()
+      
+      if (url) {
+        // Create actual HTML link with target="_blank" and rel for security
+        return `<a href="${url}" target="_blank" rel="noopener noreferrer">${displayName}</a>`
+      } else {
+        // No URL found - return as bold text
+        return `<strong>${displayName}</strong>`
+      }
+    }
+    
+    // No matching product found - return as bold text (better than placeholder)
+    console.log(`      ⚠️  No product match for: "${productName}"`)
+    return `<strong>${productName.trim()}</strong>`
+  })
 }
 
 function escapeRegex(string) {
