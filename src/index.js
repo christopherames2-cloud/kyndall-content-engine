@@ -1,15 +1,17 @@
-// src/index.js
+// kyndall-content-engine/src/index.js
 // Kyndall Content Engine
 // Automatically generates SEO blog posts from social media content
 // Supports: YouTube + TikTok
 // Posts are created as DRAFTS - must be manually reviewed and published
 // NOW INCLUDES: Automatic GEO content migration for existing posts
+// NOW INCLUDES: Amazon PA-API auto-linking for all products
 
 import cron from 'node-cron'
 import http from 'http'
 import { getLatestVideos } from './youtube.js'
 import { getLatestTikTokVideos, initTikTokSanity, getTikTokStatus } from './tiktok.js'
 import { initClaude, analyzeVideoContent } from './claude.js'
+import { initAmazon } from './amazon.js'
 import { 
   initSanity, 
   checkIfVideoProcessed, 
@@ -37,7 +39,9 @@ const config = {
     apiKey: process.env.ANTHROPIC_API_KEY
   },
   amazon: {
-    associateTag: process.env.AMAZON_ASSOCIATE_TAG || 'kyndallames09-20'
+    associateTag: process.env.AMAZON_ASSOCIATE_TAG || 'kyndallames-20',
+    accessKey: process.env.AMAZON_ACCESS_KEY,
+    secretKey: process.env.AMAZON_SECRET_KEY
   },
   sanity: {
     projectId: process.env.SANITY_PROJECT_ID || 'f9drkp1w',
@@ -91,6 +95,12 @@ function validateConfig() {
   if (!config.tiktok.clientKey || !config.tiktok.clientSecret) {
     console.log('⚠️  TikTok credentials not configured - TikTok import disabled')
     console.log('   Add TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET to enable')
+  }
+  
+  // Amazon PA-API is optional - just log status
+  if (!config.amazon.accessKey || !config.amazon.secretKey) {
+    console.log('⚠️  Amazon PA-API credentials not configured - auto-linking disabled')
+    console.log('   Add AMAZON_ACCESS_KEY and AMAZON_SECRET_KEY to enable')
   }
 }
 
@@ -346,16 +356,30 @@ async function main() {
   console.log('🚀 Kyndall Content Engine Starting...\n')
   console.log('📝 All posts are created as DRAFTS')
   console.log('🛍️  Products extracted from video descriptions')
-  console.log('💰 Amazon links get affiliate tag automatically')
+  console.log('💰 Amazon PA-API auto-links ALL products')
   console.log(`📺 YouTube: Enabled`)
   console.log(`🎵 TikTok: ${config.tiktok.clientKey ? 'Enabled (if connected)' : 'Disabled (no credentials)'}`)
+  console.log(`📦 Amazon PA-API: ${config.amazon.accessKey ? 'Enabled' : 'Disabled (no credentials)'}`)
   console.log(`🎯 GEO Migration: ${config.geoMigrationEnabled ? 'Enabled' : 'Disabled'}`)
   console.log(`📺 First run will fetch up to ${config.maxVideosFirstRun} videos per platform\n`)
   
   validateConfig()
   
-  // Initialize services
-  initClaude(config.anthropic.apiKey, config.amazon.associateTag)
+  // Initialize Amazon PA-API (for auto-linking products)
+  initAmazon({
+    accessKey: config.amazon.accessKey,
+    secretKey: config.amazon.secretKey,
+    partnerTag: config.amazon.associateTag
+  })
+  
+  // Initialize Claude with Sanity config for brand management
+  initClaude(config.anthropic.apiKey, config.amazon.associateTag, {
+    projectId: config.sanity.projectId,
+    dataset: config.sanity.dataset,
+    token: config.sanity.token
+  })
+  
+  // Initialize Sanity
   initSanity(config.sanity.projectId, config.sanity.dataset, config.sanity.token)
   
   // Initialize TikTok with Sanity client (for token storage)
@@ -388,6 +412,7 @@ async function main() {
   console.log('\n🎯 Content engine running.')
   console.log('   New YouTube videos → Draft blog posts')
   console.log('   New TikTok videos → Draft blog posts')
+  console.log('   All products → Amazon PA-API search')
   console.log('   Existing posts → GEO content migration')
   console.log('   Kyndall reviews and publishes in Sanity Studio')
 }
